@@ -7,10 +7,15 @@ from app.providers.base import LLMProvider
 from app.providers.exceptions import LLMProviderError
 from app.schemas.extraction import ExtractionResult
 
-EXTRACTION_SYSTEM_PROMPT = """You are an information extraction system for an IT service desk.
+from app.config.category_profiles import VALID_CATEGORIES
+
+_LLM_CATEGORIES = ", ".join(c for c in VALID_CATEGORIES if c != "general")
+
+EXTRACTION_SYSTEM_PROMPT = f"""You are an information extraction system for VIT's IT service desk.
 
 Given a user's raw description of an IT issue, extract:
-1. A category for the issue (or null if genuinely unclear).
+1. A category — MUST be exactly one of: {_LLM_CATEGORIES}.
+   If none of these clearly apply, return null. Do NOT invent a category name.
 2. Any of the following fields that are ACTUALLY MENTIONED in the text:
    affected_system, location, trigger, frequency, error_message, device,
    action_attempted, requester_role, department, account_type,
@@ -24,7 +29,6 @@ STRICT RULES:
 - Only include fields in extracted_fields that are relevant to what was said —
   do not pad the output with every possible field name.
 """
-
 
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str):
