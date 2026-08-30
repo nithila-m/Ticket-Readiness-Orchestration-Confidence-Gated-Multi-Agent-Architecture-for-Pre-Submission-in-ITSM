@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     llm_provider: str = "gemini"
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_model: str = "gemini-3.5-flash-lite"
 
 
 settings = Settings()

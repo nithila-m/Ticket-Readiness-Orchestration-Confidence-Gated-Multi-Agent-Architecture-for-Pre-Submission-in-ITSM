@@ -28,6 +28,11 @@ from app.core.settings import settings
 from app.providers.exceptions import LLMProviderError
 from app.providers.gemini_provider import GeminiProvider
 from app.services.ticket_analysis_service import TicketAnalysisService
+import logging
+
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+logging.getLogger("google_genai.types").setLevel(logging.ERROR)
+
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "eval"
 RESULTS_PATH = Path(__file__).resolve().parent.parent / "results" / "agent1_eval_results.csv"
@@ -50,8 +55,7 @@ COMPLETENESS_BUCKETS = {
 }
 
 # Gemini free-tier RPM protection. Adjust if you're on a paid tier.
-SECONDS_BETWEEN_CALLS = 2.0
-
+SECONDS_BETWEEN_CALLS = 4.5
 
 def load_all_tickets() -> list[dict]:
     tickets = []
@@ -83,25 +87,36 @@ def completeness_bucket_matches(predicted_score: float, expected_level: str) -> 
     return low <= predicted_score < high
 
 
-async def evaluate_ticket(service: TicketAnalysisService, ticket: dict) -> dict:
+async def evaluate_ticket(service: TicketAnalysisService, ticket: dict, max_retries: int = 2) -> dict:
     input_text = build_input_text(ticket)
     expected_category = normalize_category_label(ticket["true_category"])
 
-    try:
-        result = await service.analyze(input_text)
-        error = None
+    error = None
+    result = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = await service.analyze(input_text)
+            error = None
+            break
+        except LLMProviderError as exc:
+            error = str(exc)
+            if "429" in error and attempt < max_retries:
+                wait = 10 * (attempt + 1)  # backoff: 10s, then 20s
+                print(f"    -> 429 hit, retrying in {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            break
+
+    if result is not None:
         predicted_category = result.category.value
         completeness_score = result.completeness_score
         missing_fields_predicted = result.missing_or_uncertain_fields
-    except LLMProviderError as exc:
-        error = str(exc)
+    else:
         predicted_category = None
         completeness_score = None
         missing_fields_predicted = []
 
-    category_correct = (
-        predicted_category == expected_category if error is None else None
-    )
+    category_correct = predicted_category == expected_category if error is None else None
     bucket_match = (
         completeness_bucket_matches(completeness_score, ticket["completeness_level"])
         if error is None
@@ -176,7 +191,7 @@ def print_summary(results: list[dict]):
             by_category.setdefault(r["expected_category"], []).append(r)
 
         print("\nPer-category accuracy:")
-        for cat, rows in sorted(by_category.items()):
+        for cat, rows in sorted(by_category.items(), key=lambda x: x[0] or "UNKNOWN"):
             cat_correct = sum(1 for r in rows if r["category_correct"])
             print(f"  {cat}: {cat_correct}/{len(rows)} ({cat_correct/len(rows):.1%})")
 
