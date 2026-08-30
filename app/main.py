@@ -1,6 +1,6 @@
 from fastapi import Depends, FastAPI, HTTPException
 
-from app.core.settings import settings
+from app.config.settings import settings
 from app.dependencies import get_ticket_analysis_service
 from app.providers.exceptions import LLMProviderError
 from app.schemas.analysis import AnalysisResult

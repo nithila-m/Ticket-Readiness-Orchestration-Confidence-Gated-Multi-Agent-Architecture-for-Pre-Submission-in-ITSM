@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agents.information_extractor import InformationExtractor
 from app.config.category_profiles import normalize_category_label
-from app.core.settings import settings
+from app.config.settings import settings
 from app.providers.exceptions import LLMProviderError
 from app.providers.gemini_provider import GeminiProvider
 from app.services.ticket_analysis_service import TicketAnalysisService

@@ -1,7 +1,7 @@
 from functools import lru_cache
 
 from app.agents.information_extractor import InformationExtractor
-from app.core.settings import settings
+from app.config.settings import settings
 from app.providers.gemini_provider import GeminiProvider
 from app.services.ticket_analysis_service import TicketAnalysisService
 
