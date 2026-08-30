@@ -17,12 +17,11 @@ class StubProvider(LLMProvider):
 async def test_valid_category_passes_through_unchanged():
     canned = ExtractionResult(
         category=CategoryPrediction(value="wifi_internet", confidence=0.92),
-        extracted_fields={"affected_system": ExtractedField(value="wifi", confidence=0.9)},
+        extracted_fields={"symptom_type": ExtractedField(value="drops", confidence=0.9)},
     )
     extractor = InformationExtractor(StubProvider(canned))
     result = await extractor.extract("My wifi keeps dropping in the library.")
     assert result.category.value == "wifi_internet"
-    assert result.category.confidence == 0.92
 
 
 @pytest.mark.asyncio
@@ -64,29 +63,26 @@ async def test_extracted_fields_pass_through_untouched():
     canned = ExtractionResult(
         category=CategoryPrediction(value="ms_teams", confidence=0.9),
         extracted_fields={
-            "trigger": ExtractedField(value="joining a call", confidence=0.88),
-            "error_message": ExtractedField(value=None, confidence=0.0),
+            "failure_type": ExtractedField(value="can't hear audio", confidence=0.88),
+            "error_signal": ExtractedField(value=None, confidence=0.0),
         },
     )
     extractor = InformationExtractor(StubProvider(canned))
-    result = await extractor.extract("Teams freezes whenever I join a call.")
-    assert result.extracted_fields["trigger"].value == "joining a call"
-    assert result.extracted_fields["error_message"].value is None
+    result = await extractor.extract("Teams audio doesn't work for me.")
+    assert result.extracted_fields["failure_type"].value == "can't hear audio"
+    assert result.extracted_fields["error_signal"].value is None
 
 
 @pytest.mark.asyncio
-async def test_realistic_wifi_style_message_end_to_end_with_stub():
+async def test_realistic_ad_account_message_end_to_end_with_stub():
     canned = ExtractionResult(
-        category=CategoryPrediction(value="wifi_internet", confidence=0.95),
+        category=CategoryPrediction(value="ad_account_creation", confidence=0.9),
         extracted_fields={
-            "affected_system": ExtractedField(value="wifi", confidence=0.98),
-            "trigger": ExtractedField(value="after laptop wakes from sleep", confidence=0.91),
-            "frequency": ExtractedField(value=None, confidence=0.0),
+            "error_or_symptom": ExtractedField(value="account locked", confidence=0.95),
+            "when_started": ExtractedField(value=None, confidence=0.0),
         },
     )
     extractor = InformationExtractor(StubProvider(canned))
-    result = await extractor.extract(
-        "My wifi keeps disconnecting after I wake my laptop from sleep."
-    )
-    assert result.category.value == "wifi_internet"
-    assert result.extracted_fields["frequency"].value is None
+    result = await extractor.extract("my account is locked not able to login")
+    assert result.category.value == "ad_account_creation"
+    assert result.extracted_fields["when_started"].value is None

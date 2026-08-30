@@ -49,6 +49,8 @@ def stub_service_by_default():
     app.dependency_overrides[get_ticket_analysis_service] = override_with()
     yield
     app.dependency_overrides.clear()
+
+
 def test_health_check():
     response = client.get("/health")
     assert response.status_code == 200
@@ -59,10 +61,10 @@ def test_health_check():
 def test_analyze_returns_valid_result():
     canned = ExtractionResult(
         category=CategoryPrediction(value="wifi_internet", confidence=0.9),
-        extracted_fields={"affected_system": ExtractedField(value="wifi", confidence=0.9)},
+        extracted_fields={"symptom_type": ExtractedField(value="drops", confidence=0.9)},
     )
     app.dependency_overrides[get_ticket_analysis_service] = override_with(canned=canned)
-    response = client.post("/analyze", json={"message": "My wifi is down."})
+    response = client.post("/analyze", json={"message": "My wifi keeps dropping."})
     assert response.status_code == 200
     body = response.json()
     assert body["category"]["value"] == "wifi_internet"
@@ -96,3 +98,21 @@ def test_analyze_hallucinated_category_sanitized_through_full_stack():
     response = client.post("/analyze", json={"message": "Something vague."})
     assert response.status_code == 200
     assert response.json()["category"]["value"] is None
+
+
+def test_analyze_printer_example_returns_expected_shape():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="printer_support", confidence=0.9),
+        extracted_fields={
+            "symptom": ExtractedField(value="offline", confidence=0.9),
+            "connection_type": ExtractedField(value="network", confidence=0.85),
+        },
+    )
+    app.dependency_overrides[get_ticket_analysis_service] = override_with(canned=canned)
+    response = client.post(
+        "/analyze", json={"message": "Printer showing offline, connected over network."}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["category"]["value"] == "printer_support"
+    assert "printer_model" in body["missing_or_uncertain_fields"]

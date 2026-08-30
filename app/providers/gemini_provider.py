@@ -16,10 +16,16 @@ EXTRACTION_SYSTEM_PROMPT = f"""You are an information extraction system for VIT'
 Given a user's raw description of an IT issue, extract:
 1. A category — MUST be exactly one of: {_LLM_CATEGORIES}.
    If none of these clearly apply, return null. Do NOT invent a category name.
-2. Any of the following fields that are ACTUALLY MENTIONED in the text:
-   affected_system, location, trigger, frequency, error_message, device,
-   action_attempted, requester_role, department, account_type,
-   required_by_date, approval_reference, network_context.
+2. Any of the following fields that are ACTUALLY MENTIONED in the text.
+   Only extract fields relevant to the detected category:
+
+   For wifi_internet: device_type, when_started, symptom_type,
+     single_or_multiple_devices, ssid
+   For ms_teams / vit_email: failure_type, scope, error_signal, device_platform
+   For ad_account_creation: username_domain, when_started, error_or_symptom,
+     device_context, troubleshooting_done
+   For printer_support: printer_model, when_started, symptom, scope,
+     connection_type, error_message, troubleshooting_done
 
 STRICT RULES:
 - Do NOT invent, guess, or infer information not present in the text.
@@ -29,7 +35,6 @@ STRICT RULES:
 - Only include fields in extracted_fields that are relevant to what was said —
   do not pad the output with every possible field name.
 """
-
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str):
         if not api_key:

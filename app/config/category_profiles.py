@@ -1,65 +1,92 @@
 """
 Category-specific field weight profiles for completeness scoring.
 
-Each profile maps field_name -> weight (0.0-1.0), representing how much
-that field contributes to the completeness score for that category.
-This is a DATA REQUIREMENTS mapping for scoring — not clarification
-questions. Agent 2 decides what to ask; this only decides how "complete"
-a set of extracted fields is once they exist.
+Field vocabulary here is sourced directly from the team's synthetic
+evaluation dataset generator (the actual `missing_fields` checklists
+used to create the 30-ticket sets per category) - NOT invented
+independently. If the dataset's checklist changes, this file must
+change with it.
+
+Weights are still a judgment call (no labeled ground-truth score exists
+to fit them against - see prior discussion on why backprop doesn't
+apply here). They reflect how much each field matters to a human
+agent actually acting on the ticket, not measured importance.
 """
 
 CATEGORY_FIELD_PROFILES: dict[str, dict[str, float]] = {
     "wifi_internet": {
-        "affected_system": 1.0,   # wifi vs ethernet vs vpn-over-wifi
-        "location": 0.9,          # hostel block, academic building, library, etc.
-        "trigger": 0.7,           # e.g. "after connecting", "during class hours"
-        "frequency": 0.7,
-        "error_message": 0.6,
-        "device": 0.5,
-    },
-    "vit_email": {
-        "affected_system": 1.0,   # webmail vs Outlook client vs mobile app
-        "action_attempted": 1.0,  # login, send, receive, password reset
-        "error_message": 0.9,
-        "device": 0.5,
-        "frequency": 0.5,
+        "symptom_type": 1.0,               # won't connect / drops / slow, etc.
+        "single_or_multiple_devices": 0.8,  # scopes the problem: device vs. infra
+        "when_started": 0.7,
+        "device_type": 0.6,
+        "ssid": 0.5,
     },
     "ms_teams": {
-        "affected_system": 1.0,   # desktop app vs web vs mobile
-        "trigger": 0.9,           # joining a meeting, during a call, screen share
-        "error_message": 0.8,
-        "device": 0.6,
-        "frequency": 0.5,
+        "failure_type": 1.0,
+        "scope": 0.8,                      # one user vs. everyone in a call/team
+        "error_signal": 0.7,
+        "device_platform": 0.6,
+    },
+    "vit_email": {
+        "failure_type": 1.0,
+        "scope": 0.8,
+        "error_signal": 0.7,
+        "device_platform": 0.6,
     },
     "ad_account_creation": {
-        "requester_role": 1.0,    # student, faculty, staff
-        "department": 0.9,
-        "account_type": 0.8,      # what kind of AD account is needed
-        "required_by_date": 0.6,
-        "approval_reference": 0.5,  # e.g. HOD/faculty approval reference
+        "error_or_symptom": 1.0,
+        "username_domain": 0.7,
+        "when_started": 0.6,
+        "device_context": 0.6,
+        "troubleshooting_done": 0.5,
     },
     "printer_support": {
-        "affected_system": 1.0,   # printer/device identifier or model
-        "location": 0.9,          # which lab/floor/department
-        "error_message": 0.9,
-        "network_context": 0.5,   # shared network printer vs local/USB
-        "frequency": 0.5,
+        "symptom": 1.0,
+        "scope": 0.8,                      # one printer vs. all printers on a floor
+        "error_message": 0.7,
+        "connection_type": 0.6,
+        "printer_model": 0.6,
+        "when_started": 0.6,
+        "troubleshooting_done": 0.5,
     },
     # Fallback for messages that don't cleanly match any category above.
-    # Kept deliberately minimal — this is a safety net, not a real category.
+    # Deliberately generic - not tied to any one category's real checklist.
     "general": {
-        "affected_system": 0.8,
-        "error_message": 0.7,
-        "location": 0.5,
+        "symptom_or_error": 1.0,
+        "when_started": 0.6,
+        "scope": 0.5,
     },
 }
 
 VALID_CATEGORIES: list[str] = list(CATEGORY_FIELD_PROFILES.keys())
 
+# Maps the human-readable category labels used in the synthetic dataset
+# (category_selected / true_category) to this codebase's internal keys.
+CATEGORY_DISPLAY_TO_KEY: dict[str, str] = {
+    "Wifi/Internet Support": "wifi_internet",
+    "Microsoft Teams Support": "ms_teams",
+    "VIT Email Support": "vit_email",
+    "AD Account Creation": "ad_account_creation",
+    "Printer Support": "printer_support",
+}
+
+
+def normalize_category_label(display_name: str | None) -> str | None:
+    """
+    Convert a human-readable dataset category label to this codebase's
+    internal snake_case key. Returns None if unrecognized (does NOT
+    fall back to 'general' here - that's the scorer's job, not this
+    function's; conflating the two would hide a real labeling bug
+    behind a silent fallback).
+    """
+    if display_name is None:
+        return None
+    return CATEGORY_DISPLAY_TO_KEY.get(display_name)
+
 
 def get_profile(category: str | None) -> dict[str, float]:
     """
-    Return the field-weight profile for a category.
+    Return the field-weight profile for an internal category key.
     Falls back to 'general' if category is None or unrecognized.
     """
     if category is None or category not in CATEGORY_FIELD_PROFILES:
