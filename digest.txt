@@ -1,0 +1,4137 @@
+Directory structure:
+└── TRO/
+    ├── pytest.ini
+    ├── requirements.txt
+    ├── .env.example
+    ├── app/
+    │   ├── __init__.py
+    │   ├── dependencies.py
+    │   ├── main.py
+    │   ├── agents/
+    │   │   ├── completeness_scorer.py
+    │   │   └── information_extractor.py
+    │   ├── config/
+    │   │   └── category_profiles.py
+    │   ├── core/
+    │   │   ├── __init__.py
+    │   │   └── settings.py
+    │   ├── providers/
+    │   │   ├── base.py
+    │   │   ├── exceptions.py
+    │   │   └── gemini_provider.py
+    │   ├── schemas/
+    │   │   ├── __init__.py
+    │   │   ├── analysis.py
+    │   │   ├── conversation.py
+    │   │   └── extraction.py
+    │   └── services/
+    │       └── ticket_analysis_service.py
+    ├── data/
+    │   └── eval/
+    │       ├── ad_account_creation.json
+    │       ├── ms_teams.json
+    │       ├── printer_support.json
+    │       ├── vit_email.json
+    │       └── wifi_internet.json
+    ├── results/
+    │   └── agent1_eval_results.csv
+    ├── scripts/
+    │   └── run_agent1_eval.py
+    └── tests/
+        ├── README.md
+        ├── __init__.py
+        ├── test_api.py
+        ├── test_category_profiles.py
+        ├── test_completeness_scorer.py
+        ├── test_gemini_provider.py
+        ├── test_information_extractor.py
+        ├── test_schemas.py
+        └── test_ticket_analysis_service.py
+
+================================================
+FILE: pytest.ini
+================================================
+[pytest]
+asyncio_mode = auto
+
+
+================================================
+FILE: requirements.txt
+================================================
+fastapi==0.128.0
+uvicorn[standard]==0.34.0
+pydantic==2.12.0
+pydantic-settings==2.7.0
+pytest==8.3.4
+httpx==0.28.1
+google-genai==1.29.0
+pytest-asyncio==0.25.0
+
+
+================================================
+FILE: .env.example
+================================================
+# LLM Provider Configuration
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=AQ.Ab8RN6LouIVIzW8CrNu8SfURDvCl_xcX8ToySMHSX60eFGoWhg
+GEMINI_MODEL=gemini-3.5-flash-lite
+# App Settings
+APP_ENV=development
+
+
+================================================
+FILE: app/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: app/dependencies.py
+================================================
+from functools import lru_cache
+
+from app.agents.information_extractor import InformationExtractor
+from app.core.settings import settings
+from app.providers.gemini_provider import GeminiProvider
+from app.services.ticket_analysis_service import TicketAnalysisService
+
+
+@lru_cache
+def get_ticket_analysis_service() -> TicketAnalysisService:
+    """
+    Builds the real, Gemini-backed TicketAnalysisService.
+    Cached as a singleton - safe because GeminiProvider holds no
+    per-request state. Only instantiated on first actual call (i.e.
+    the first /analyze request), not at app startup, so /health
+    doesn't require an API key to work.
+    """
+    provider = GeminiProvider(api_key=settings.gemini_api_key or "", model=settings.gemini_model)
+    extractor = InformationExtractor(provider)
+    return TicketAnalysisService(extractor)
+
+
+================================================
+FILE: app/main.py
+================================================
+from fastapi import Depends, FastAPI, HTTPException
+
+from app.core.settings import settings
+from app.dependencies import get_ticket_analysis_service
+from app.providers.exceptions import LLMProviderError
+from app.schemas.analysis import AnalysisResult
+from app.schemas.conversation import UserMessageRequest
+from app.services.ticket_analysis_service import TicketAnalysisService
+
+app = FastAPI(title="TRO - Ticket Readiness Orchestration", version="0.1.0")
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "environment": settings.app_env,
+    }
+
+
+@app.post("/analyze", response_model=AnalysisResult)
+async def analyze_ticket(
+    request: UserMessageRequest,
+    service: TicketAnalysisService = Depends(get_ticket_analysis_service),
+) -> AnalysisResult:
+    try:
+        return await service.analyze(request.message)
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+================================================
+FILE: app/agents/completeness_scorer.py
+================================================
+"""
+Deterministic completeness scoring for Agent 1.
+
+completeness_score = sum(weight * confidence) / sum(weight)
+                      over all fields defined in the category's profile.
+
+A field counts as "missing_or_uncertain" if:
+  - it was never extracted at all (absent from extracted_fields), OR
+  - its value is None, OR
+  - its confidence is below CONFIDENCE_THRESHOLD
+
+This logic is intentionally pure and LLM-free: it only reasons over
+already-extracted structured data, so it's independently testable
+without any API calls.
+"""
+
+from typing import NamedTuple
+
+from app.config.category_profiles import get_profile
+from app.schemas.extraction import ExtractedField
+
+CONFIDENCE_THRESHOLD = 0.5
+
+
+class CompletenessResult(NamedTuple):
+    score: float
+    missing_or_uncertain_fields: list[str]
+
+
+def score_completeness(
+    category: str | None,
+    extracted_fields: dict[str, ExtractedField],
+    confidence_threshold: float = CONFIDENCE_THRESHOLD,
+) -> CompletenessResult:
+    profile = get_profile(category)
+
+    if not profile:
+        return CompletenessResult(score=0.0, missing_or_uncertain_fields=[])
+
+    total_weight = 0.0
+    weighted_sum = 0.0
+    missing_or_uncertain: list[str] = []
+
+    for field_name, weight in profile.items():
+        field = extracted_fields.get(field_name)
+        total_weight += weight
+
+        if field is None:
+            missing_or_uncertain.append(field_name)
+            continue
+
+        weighted_sum += weight * field.confidence
+
+        if field.value is None or field.confidence < confidence_threshold:
+            missing_or_uncertain.append(field_name)
+
+    score = weighted_sum / total_weight if total_weight > 0 else 0.0
+
+    return CompletenessResult(
+        score=round(score, 4),
+        missing_or_uncertain_fields=missing_or_uncertain,
+    )
+
+
+================================================
+FILE: app/agents/information_extractor.py
+================================================
+"""
+Agent 1 orchestration: Information Extractor.
+
+Wraps an LLMProvider to produce a validated ExtractionResult. Prompting
+alone (see gemini_provider.py) is not a guarantee â€” this adds a second,
+code-level check that rejects any category the LLM returns outside TRO's
+known set, rather than trusting instruction-following blindly.
+"""
+
+from app.config.category_profiles import VALID_CATEGORIES
+from app.providers.base import LLMProvider
+from app.schemas.extraction import CategoryPrediction, ExtractionResult
+
+# "general" is an internal fallback profile for the scorer - it has no
+# real signal in the input text, so the LLM should never claim to have
+# detected it. Treat it the same as any other out-of-vocabulary label.
+_LLM_ASSIGNABLE_CATEGORIES = {c for c in VALID_CATEGORIES if c != "general"}
+
+
+class InformationExtractor:
+    def __init__(self, provider: LLMProvider):
+        self._provider = provider
+
+    async def extract(self, issue_text: str) -> ExtractionResult:
+        result = await self._provider.extract_information(issue_text)
+        return self._sanitize_category(result)
+
+    @staticmethod
+    def _sanitize_category(result: ExtractionResult) -> ExtractionResult:
+        category = result.category
+        if category.value is not None and category.value not in _LLM_ASSIGNABLE_CATEGORIES:
+            return result.model_copy(
+                update={"category": CategoryPrediction(value=None, confidence=0.0)}
+            )
+        return result
+
+
+================================================
+FILE: app/config/category_profiles.py
+================================================
+"""
+Category-specific field weight profiles for completeness scoring.
+
+Field vocabulary here is sourced directly from the team's synthetic
+evaluation dataset generator (the actual `missing_fields` checklists
+used to create the 30-ticket sets per category) - NOT invented
+independently. If the dataset's checklist changes, this file must
+change with it.
+
+Weights are still a judgment call (no labeled ground-truth score exists
+to fit them against - see prior discussion on why backprop doesn't
+apply here). They reflect how much each field matters to a human
+agent actually acting on the ticket, not measured importance.
+"""
+
+CATEGORY_FIELD_PROFILES: dict[str, dict[str, float]] = {
+    "wifi_internet": {
+        "symptom_type": 1.0,               # won't connect / drops / slow, etc.
+        "single_or_multiple_devices": 0.8,  # scopes the problem: device vs. infra
+        "when_started": 0.7,
+        "device_type": 0.6,
+        "ssid": 0.5,
+    },
+    "ms_teams": {
+        "failure_type": 1.0,
+        "scope": 0.8,                      # one user vs. everyone in a call/team
+        "error_signal": 0.7,
+        "device_platform": 0.6,
+    },
+    "vit_email": {
+        "failure_type": 1.0,
+        "scope": 0.8,
+        "error_signal": 0.7,
+        "device_platform": 0.6,
+    },
+    "ad_account_creation": {
+        "error_or_symptom": 1.0,
+        "username_domain": 0.7,
+        "when_started": 0.6,
+        "device_context": 0.6,
+        "troubleshooting_done": 0.5,
+    },
+    "printer_support": {
+        "symptom": 1.0,
+        "scope": 0.8,                      # one printer vs. all printers on a floor
+        "error_message": 0.7,
+        "connection_type": 0.6,
+        "printer_model": 0.6,
+        "when_started": 0.6,
+        "troubleshooting_done": 0.5,
+    },
+    # Fallback for messages that don't cleanly match any category above.
+    # Deliberately generic - not tied to any one category's real checklist.
+    "general": {
+        "symptom_or_error": 1.0,
+        "when_started": 0.6,
+        "scope": 0.5,
+    },
+}
+
+VALID_CATEGORIES: list[str] = list(CATEGORY_FIELD_PROFILES.keys())
+
+# Maps the human-readable category labels used in the synthetic dataset
+# (category_selected / true_category) to this codebase's internal keys.
+CATEGORY_DISPLAY_TO_KEY: dict[str, str] = {
+    "Wifi/Internet Support": "wifi_internet",
+    "Microsoft Teams Support": "ms_teams",
+    "VIT Email Support": "vit_email",
+    "AD Account Creation": "ad_account_creation",
+    "Printer Support": "printer_support",
+}
+
+
+def normalize_category_label(display_name: str | None) -> str | None:
+    """
+    Convert a human-readable dataset category label to this codebase's
+    internal snake_case key. Returns None if unrecognized (does NOT
+    fall back to 'general' here - that's the scorer's job, not this
+    function's; conflating the two would hide a real labeling bug
+    behind a silent fallback).
+    """
+    if display_name is None:
+        return None
+    return CATEGORY_DISPLAY_TO_KEY.get(display_name)
+
+
+def get_profile(category: str | None) -> dict[str, float]:
+    """
+    Return the field-weight profile for an internal category key.
+    Falls back to 'general' if category is None or unrecognized.
+    """
+    if category is None or category not in CATEGORY_FIELD_PROFILES:
+        return CATEGORY_FIELD_PROFILES["general"]
+    return CATEGORY_FIELD_PROFILES[category]
+
+
+================================================
+FILE: app/core/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: app/core/settings.py
+================================================
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    app_env: str = "development"
+    llm_provider: str = "gemini"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.5-flash-lite"
+
+
+settings = Settings()
+
+
+================================================
+FILE: app/providers/base.py
+================================================
+from abc import ABC, abstractmethod
+
+from app.schemas.extraction import ExtractionResult
+
+
+class LLMProvider(ABC):
+    """Abstract interface for any LLM-based information extractor."""
+
+    @abstractmethod
+    async def extract_information(self, issue_text: str) -> ExtractionResult:
+        """
+        Extract structured fields + category from raw user issue text.
+        Must never invent values â€” missing info should come back as
+        value=None, confidence=0.0 (enforced downstream by ExtractionResult's
+        own validators).
+        """
+        raise NotImplementedError
+
+
+================================================
+FILE: app/providers/exceptions.py
+================================================
+class LLMProviderError(Exception):
+    """Raised when the LLM provider fails to return a usable structured response."""
+
+    def __init__(self, message: str, cause: Exception | None = None):
+        super().__init__(message)
+        self.cause = cause
+
+
+================================================
+FILE: app/providers/gemini_provider.py
+================================================
+import json
+
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field, ValidationError
+
+from app.config.category_profiles import VALID_CATEGORIES
+from app.providers.base import LLMProvider
+from app.providers.exceptions import LLMProviderError
+from app.schemas.extraction import CategoryPrediction, ExtractedField, ExtractionResult
+
+_LLM_CATEGORIES = ", ".join(c for c in VALID_CATEGORIES if c != "general")
+
+EXTRACTION_SYSTEM_PROMPT = f"""You are an information extraction system for VIT's IT service desk.
+
+Given a user's raw description of an IT issue, extract:
+1. A category â€” MUST be exactly one of: {_LLM_CATEGORIES}.
+   If none of these clearly apply, return null. Do NOT invent a category name.
+2. Any of the following fields that are ACTUALLY MENTIONED in the text.
+   Only extract fields relevant to the detected category. Return each as an
+   object with field_name, value, and confidence:
+
+   For wifi_internet: device_type, when_started, symptom_type,
+     single_or_multiple_devices, ssid
+   For ms_teams / vit_email: failure_type, scope, error_signal, device_platform
+   For ad_account_creation: username_domain, when_started, error_or_symptom,
+     device_context, troubleshooting_done
+   For printer_support: printer_model, when_started, symptom, scope,
+     connection_type, error_message, troubleshooting_done
+
+STRICT RULES:
+- Do NOT invent, guess, or infer information not present in the text.
+- Do not output a field at all if it is not mentioned in the text â€” omit it
+  from the fields list entirely rather than including it with a null value.
+- confidence reflects how certain you are about an extracted value (0.0-1.0),
+  based only on textual evidence, not plausibility.
+"""
+
+
+class WireExtractedField(BaseModel):
+    """LLM-facing shape for a single field. Fixed properties only -
+    Gemini's schema validator rejects open-ended dict/map types."""
+
+    field_name: str
+    value: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class WireExtractionResponse(BaseModel):
+    """
+    LLM-facing response schema. Gemini's structured-output mode does not
+    support Pydantic's `dict[str, X]` fields (they compile to JSON Schema's
+    `additionalProperties`, which the Gemini API rejects outright). This
+    flat list-of-objects shape is a fixed schema Gemini can enforce, and
+    gets converted into the real ExtractionResult (dict-keyed) domain
+    model after parsing - callers of this provider never see this format.
+    """
+
+    category: CategoryPrediction
+    fields: list[WireExtractedField] = Field(default_factory=list)
+
+
+def _wire_to_extraction_result(wire: WireExtractionResponse) -> ExtractionResult:
+    extracted_fields = {
+        item.field_name: ExtractedField(value=item.value, confidence=item.confidence)
+        for item in wire.fields
+    }
+    return ExtractionResult(category=wire.category, extracted_fields=extracted_fields)
+
+
+class GeminiProvider(LLMProvider):
+    def __init__(self, api_key: str, model: str):
+        if not api_key:
+            raise LLMProviderError("Gemini API key is missing. Set GEMINI_API_KEY in .env.")
+        self._client = genai.Client(api_key=api_key)
+        self._model = model
+
+    async def extract_information(self, issue_text: str) -> ExtractionResult:
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=f"{EXTRACTION_SYSTEM_PROMPT}\n\nUser issue:\n{issue_text}",
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=WireExtractionResponse,
+                ),
+            )
+        except Exception as exc:
+            raise LLMProviderError(f"Gemini API call failed: {exc}", cause=exc) from exc
+
+        wire = response.parsed
+        if wire is None:
+            try:
+                data = json.loads(response.text)
+                wire = WireExtractionResponse.model_validate(data)
+            except Exception as exc:
+                raise LLMProviderError(
+                    f"Gemini returned a response that failed schema validation: {exc}",
+                    cause=exc,
+                ) from exc
+
+        try:
+            return _wire_to_extraction_result(wire)
+        except ValidationError as exc:
+            raise LLMProviderError(
+                f"Gemini returned an internally inconsistent field "
+                f"(e.g. a null value with nonzero confidence): {exc}",
+                cause=exc,
+            ) from exc
+
+
+================================================
+FILE: app/schemas/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: app/schemas/analysis.py
+================================================
+from pydantic import BaseModel, Field
+
+from app.schemas.extraction import CategoryPrediction, ExtractedField
+
+
+class AnalysisResult(BaseModel):
+    """Final Agent 1 output: extraction + completeness score."""
+
+    category: CategoryPrediction
+    extracted_fields: dict[str, ExtractedField] = Field(default_factory=dict)
+    completeness_score: float = Field(ge=0.0, le=1.0)
+    missing_or_uncertain_fields: list[str] = Field(default_factory=list)
+
+
+================================================
+FILE: app/schemas/conversation.py
+================================================
+from pydantic import BaseModel, Field
+
+from app.schemas.extraction import CategoryPrediction, ExtractedField
+
+
+class Message(BaseModel):
+    role: str  # "user" or "system"
+    content: str
+
+
+class UserMessageRequest(BaseModel):
+    """Incoming request body for POST /analyze."""
+
+    message: str = Field(min_length=1)
+
+
+class ConversationState(BaseModel):
+    """
+    Full shared state, forward-compatible with Agent 2.
+    Agent 1 populates: raw_messages, extracted_fields, detected_category,
+    completeness_score, missing_or_uncertain_fields.
+    Agent 2 will later append to clarification_log and increment turn_count.
+    """
+
+    conversation_id: str
+    turn_count: int = 0
+    raw_messages: list[Message] = Field(default_factory=list)
+    extracted_fields: dict[str, ExtractedField] = Field(default_factory=dict)
+    detected_category: CategoryPrediction | None = None
+    completeness_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    missing_or_uncertain_fields: list[str] = Field(default_factory=list)
+    clarification_log: list[str] = Field(default_factory=list)
+
+
+================================================
+FILE: app/schemas/extraction.py
+================================================
+from typing import Any
+from pydantic import BaseModel, Field, model_validator
+
+
+class ExtractedField(BaseModel):
+    """A single extracted piece of information with its confidence."""
+
+    value: Any | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def enforce_null_value_zero_confidence(self):
+        if self.value is None and self.confidence != 0.0:
+            raise ValueError("Confidence must be 0 when extracted value is None")
+        return self
+
+
+class CategoryPrediction(BaseModel):
+    """The detected issue category with confidence. None = extractor couldn't determine it."""
+
+    value: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def enforce_null_value_zero_confidence(self):
+        if self.value is None and self.confidence != 0.0:
+            raise ValueError("Confidence must be 0 when category is None")
+        return self
+
+
+class ExtractionResult(BaseModel):
+    """Raw output from the Information Extractor (LLM call), before scoring."""
+
+    category: CategoryPrediction
+    extracted_fields: dict[str, ExtractedField] = Field(default_factory=dict)
+
+
+================================================
+FILE: app/services/ticket_analysis_service.py
+================================================
+"""
+Ticket Analysis Service â€” combines Agent 1's two halves:
+InformationExtractor (LLM-based extraction) and score_completeness
+(deterministic scoring) into the single Agent 1 result.
+
+Deliberately does NOT catch LLMProviderError - failures propagate to
+the caller (the API layer) so they can be turned into a proper HTTP
+response instead of being silently masked here.
+"""
+
+from app.agents.completeness_scorer import score_completeness
+from app.agents.information_extractor import InformationExtractor
+from app.schemas.analysis import AnalysisResult
+
+
+class TicketAnalysisService:
+    def __init__(self, extractor: InformationExtractor):
+        self._extractor = extractor
+
+    async def analyze(self, issue_text: str) -> AnalysisResult:
+        extraction = await self._extractor.extract(issue_text)
+
+        completeness = score_completeness(
+            category=extraction.category.value,
+            extracted_fields=extraction.extracted_fields,
+        )
+
+        return AnalysisResult(
+            category=extraction.category,
+            extracted_fields=extraction.extracted_fields,
+            completeness_score=completeness.score,
+            missing_or_uncertain_fields=completeness.missing_or_uncertain_fields,
+        )
+
+
+================================================
+FILE: data/eval/ad_account_creation.json
+================================================
+[
+  {
+    "ticket_id": "ADA-001",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "SJT",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "locked out cant login",
+    "message": "sir my account is locked not able to login pls help urgent i have exam portal work",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-002",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "TT",
+    "room": "TT-214",
+    "priority": "MEDIUM",
+    "subject": "New account not active yet",
+    "message": "I joined as a project associate on Monday and HR said my AD account (username should be given as per employee code EMP2291) is created but I still can't log in to any lab PC in TT-214. It's been about 20 hours now. Is this normal or is something wrong?",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_or_symptom", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-003",
+    "category_selected": "AD Account Creation",
+    "true_category": "VIT Email",
+    "building": "Admin Block",
+    "room": "AB-1st Floor",
+    "priority": "MEDIUM",
+    "subject": "AD login works but mailbox missing",
+    "message": "My AD username is s.rangarajan and I can log in fine to the campus portal and to lab machines since yesterday. But when I try to open my VITian mail (outlook.office.com) it says 'mailbox not found for this account'. Started this morning around 9am, tried on both my laptop (Chrome) and phone browser, same error on both. No password change recently, this is a fresh account provisioned last week.",
+    "ocr_text": "Your mailbox is not found. If this is unexpected, contact IT support.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-004",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "account still not made",
+    "message": "requested account 4 days back through HOD approval, dept office confirmed approved but nothing happened yet, need it for attendance system",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started", "device_context", "troubleshooting_done", "scope"]
+  },
+  {
+    "ticket_id": "ADA-005",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Admin Block",
+    "room": "AB-204",
+    "priority": "HIGH",
+    "subject": "Ganesh Iyer account still not created",
+    "message": "This is regarding Mr. Ganesh Iyer (contractual, IT Dept). Approval was sent by HR three days back but AD account is still not created, he cannot access anything on campus systems. Please expedite, this is holding up his onboarding.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-006",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "PRP",
+    "room": "PRP-G5",
+    "priority": "LOW",
+    "subject": "password expired need reset",
+    "message": "Getting 'your password has expired, contact administrator' message when I try to log into the lab PC using my username vt.balan22. Started today morning. Tried on two different PCs in PRP-G5, same message both times. Haven't changed my password in a while so this is expected I think, just need the reset steps.",
+    "ocr_text": "Your password has expired and must be changed. Contact your administrator.",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-007",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "GDN",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "account creation rejected??",
+    "message": "put in a request for account creation for our new lab assistant, got a mail saying request rejected due to 'name mismatch with HR record'. not sure what to do next, her name on ID card and HR system might be spelled differently (Sowmiya vs Sowmya)",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started", "device_context", "troubleshooting_done", "scope"]
+  },
+  {
+    "ticket_id": "ADA-008",
+    "category_selected": "AD Account Creation",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": "TT-408",
+    "priority": "MEDIUM",
+    "subject": "cant sign into anything",
+    "message": "logging in fine on my laptop for email and portal but teams app just spins forever after i enter password, closes and reopens on its own",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-009",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Men's Hostel A",
+    "room": "A-312",
+    "priority": "HIGH",
+    "subject": "cant login since evening",
+    "message": "suddenly cant login with my AD id, works fine yesterday, now says wrong password even though im 100% sure its correct",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": ["username_domain", "error_or_symptom", "device_context", "troubleshooting_done", "scope"]
+  },
+  {
+    "ticket_id": "ADA-010",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "SJT",
+    "room": "SJT-1105",
+    "priority": "LOW",
+    "subject": "locked myself out, need unlock",
+    "message": "I entered my password wrong about 5-6 times by mistake around 2:30pm today (username: hr.deepika) while trying to log into the shared printer login on SJT-1105 PC. Now it shows account locked. I know this usually auto-unlocks, just want to confirm timing so I'm not stuck again.",
+    "ocr_text": "Account locked. Please try again later or contact your administrator.",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-011",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "CDMM",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "account disabled without notice",
+    "message": "My account got disabled suddenly, I wasn't informed of any reason. I need it for submitting my project report tonight, this is very urgent, please look into it.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-012",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Ladies Hostel D",
+    "room": "D-207",
+    "priority": "LOW",
+    "subject": "forgot my login id",
+    "message": "hi i forgot what my ad username is, is it my reg no or something else? need it to login to wifi portal",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-013",
+    "category_selected": "AD Account Creation",
+    "true_category": "VIT Email",
+    "building": "SMV",
+    "room": "SMV-302",
+    "priority": "MEDIUM",
+    "subject": "Login fine, mail not syncing on outlook app",
+    "message": "AD login is completely fine â€” I can access the portal, wifi, and lab systems without issue using username r.krishnan. The problem is only with the Outlook desktop app on my personal laptop, it keeps prompting for password repeatedly and never syncs new mail. Started two days ago after I changed my AD password. Tried removing and re-adding the account in Outlook, still fails at the sync step with error 0x8004102A.",
+    "ocr_text": "Something went wrong (0x8004102A). We're having trouble connecting to your account.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-014",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Admin Block",
+    "room": "AB-104",
+    "priority": "HIGH",
+    "subject": "Following up: Ganesh Iyer's account creation still pending",
+    "message": "Writing again on behalf of Mr. Ganesh Iyer, contractual staff in the IT department, employee code CTS-2291. HR approval for his AD account was granted on the 25th, three days ago, but the account is still not showing up in the directory and he cannot log into any campus system (PC, VPN, or email). He has already tried logging in from two different systems in the Admin office with no luck, and this is now blocking his onboarding tasks entirely. Could someone please check the AD creation queue for his record specifically?",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-015",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "GDN",
+    "room": null,
+    "priority": "LOW",
+    "subject": "reset link expired",
+    "message": "clicked forgot password, got the reset link on my personal mail, but by the time I opened it (maybe an hour later) it said link expired. can someone resend or tell me how long it's valid for",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "device_context"]
+  },
+  {
+    "ticket_id": "ADA-016",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "TT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "new staff account request",
+    "message": "requesting AD account for a new contractual staff joining our department next week, what's the process and how long does it usually take",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started", "error_or_symptom", "device_context", "scope"]
+  },
+  {
+    "ticket_id": "ADA-017",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "PRP",
+    "room": "PRP-B2",
+    "priority": "MEDIUM",
+    "subject": "System says account already exists",
+    "message": "Trying to complete AD account setup for our new lab technician Mr. Arul Kumar, but the creation form keeps rejecting with 'account already exists for this employee ID.' We checked and he's never had an account before at VIT. This started when we submitted the request yesterday afternoon and we've resubmitted twice since with the same result, both times through the HR self-service portal.",
+    "ocr_text": "Error: An account with this Employee ID already exists in Active Directory.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-018",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Men's Hostel A",
+    "room": "A-118",
+    "priority": "HIGH",
+    "subject": "friends also having same login problem",
+    "message": "me and at least 2 other guys on my floor all suddenly can't log in with our AD ids since about half an hour ago, all of us get wrong password even though none of us changed anything recently. seems bigger than just my account",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": ["username_domain", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-019",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "SJT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "dont remember username format",
+    "message": "hey, need help logging into wifi, don't remember if my ad username has dots or not, can you check against my reg no 21BCE1187",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-020",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "SMV",
+    "room": "SMV-Server Room",
+    "priority": "HIGH",
+    "subject": "New account can't reach VPN even after login working",
+    "message": "New AD account (username: n.subramani, created yesterday for our incoming faculty) logs in fine on the campus portal and lab PCs, but VPN client rejects the credentials every time with 'group policy restriction' error. Tried both the Cisco AnyConnect client and the web VPN portal from two different machines in the server room, same result both times. No recent password change, this is the first login attempt on VPN specifically.",
+    "ocr_text": "VPN Error: User does not belong to required access group. Contact administrator.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-021",
+    "category_selected": "AD Account Creation",
+    "true_category": "Microsoft Teams Support",
+    "building": "CDMM",
+    "room": "CDMM-2nd Floor",
+    "priority": "MEDIUM",
+    "subject": "meetings not showing up",
+    "message": "everything else logs in fine, only teams calendar is not showing any of my scheduled meetings even though I can see them fine in outlook",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-022",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Admin Block",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "still waiting on that account",
+    "message": "checking in again about Ganesh's account, its been days now, this is really holding things up on our end",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["username_domain", "when_started", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-023",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "GDN",
+    "room": "GDN-114",
+    "priority": "LOW",
+    "subject": "Temporary lockout, just confirming",
+    "message": "Locked myself out after entering the wrong password a few too many times around 11am today (username: p.elango) while setting up email on my new phone. I've read that these unlock automatically after roughly 30 minutes â€” just want to confirm that's accurate before I try again, don't want to get locked out for longer.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-024",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "TT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "research scholar account pending",
+    "message": "our new PhD scholar joined the lab last week, account request submitted but dept says HR data feed doesn't have her record properly, don't know what to do now",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-025",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "PRP",
+    "room": "PRP-C1",
+    "priority": "LOW",
+    "subject": "self reset not sending otp",
+    "message": "trying to reset my password through the self service page, it asks for otp but nothing is coming to my registered mobile number, tried twice already",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started"]
+  },
+  {
+    "ticket_id": "ADA-026",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Admin Block",
+    "room": "AB-HR Wing",
+    "priority": "HIGH",
+    "subject": "Bulk onboarding batch failed for 6 new staff",
+    "message": "We submitted a batch AD account request for 6 new administrative staff joining this week (employee codes ADM-4410 through ADM-4415) through the usual HR bulk-upload sheet on Tuesday morning. Yesterday we got a notification that the whole batch failed with 'data validation error' but no specifics on which fields or which of the 6 records caused it. None of the 6 have working accounts yet and they're supposed to start Monday. Can someone check the batch log?",
+    "ocr_text": "Batch Upload Failed: 6 records rejected. Reason: Data validation error. See attached log.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-027",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Men's Hostel A",
+    "room": "A-401",
+    "priority": "HIGH",
+    "subject": "Confirming widespread AD login issue in Men's Hostel A",
+    "message": "Adding to what's already been reported â€” this seems to be affecting more than one or two people. Since around 7:15pm this evening, at least four of us on the 1st, 3rd and 4th floors of Men's Hostel A have all been unable to log in with our AD credentials, all getting an 'incorrect password' error despite being sure our passwords are correct. No one changed their password recently. We tried both the wifi captive portal and the mobile app, same error on both. Feels like something changed on the AD side around that time, not an individual account issue.",
+    "ocr_text": "Authentication failed. Incorrect username or password.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-028",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Ladies Hostel D",
+    "room": null,
+    "priority": "LOW",
+    "subject": "password reset help",
+    "message": "need to reset password, forgot it after vacation lol, whats the process",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["username_domain", "when_started", "error_or_symptom", "device_context", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "ADA-029",
+    "category_selected": "AD Account Creation",
+    "true_category": "VIT Email",
+    "building": "SMV",
+    "room": "SMV-101",
+    "priority": "MEDIUM",
+    "subject": "AD works but old mail missing after account merge",
+    "message": "My AD account itself is working perfectly fine, I can log into everything without any issue using username j.fernandez. The problem is that after IT merged my old contractual account into my new permanent staff account last week, all my previous email history (about 2 years of mail) seems to have vanished from Outlook, only new mail is showing up. Checked on both webmail and the desktop app, same result on both, mailbox size also shows much smaller than before.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "ADA-030",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "CDMM",
+    "room": "CDMM-G3",
+    "priority": "MEDIUM",
+    "subject": "wrong department showing on my account",
+    "message": "just noticed my AD account shows me under the wrong department (shows Mechanical, I'm actually in CSE), not sure if this affects my access to shared drives, wanted to flag it before it causes login/permission problems",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started", "error_or_symptom", "troubleshooting_done"]
+  }
+]
+
+
+
+================================================
+FILE: data/eval/ms_teams.json
+================================================
+[
+  {
+    "ticket_id": "TEAMS-001",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Teams not working",
+    "message": "teams not working for me since morning, pls fix asap",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-002",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": "TT-301",
+    "priority": "LOW",
+    "subject": "Can't hear audio in Teams meetings",
+    "message": "Whenever I join a meeting on the Teams desktop app, I can see everyone but I can't hear anything. It happens in every meeting, not just one. No error message pops up though.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal"]
+  },
+  {
+    "ticket_id": "TEAMS-003",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Video not showing up in meetings",
+    "message": "My camera doesn't turn on in Teams meetings anymore. It works fine in other apps like Zoom. This is only happening on Teams, both desktop and web browser. No error, camera light doesn't even turn on when I click the camera icon.",
+    "ocr_text": "Camera access blocked by system settings",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-004",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "VIT Email Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "Can't log into Teams",
+    "message": "I keep trying to sign into Teams and it says my password is wrong, but I'm sure I'm typing the right one. This happened suddenly today.",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-005",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "Men's Hostel A-Block",
+    "room": "A-214",
+    "priority": "MEDIUM",
+    "subject": "Teams app crashes every time I open it",
+    "message": "Every single time I try to open the Teams desktop app on my laptop, it crashes within a few seconds of loading â€” before I even get to the login screen. Tried restarting my laptop and reinstalling once, no change. This is happening across all meetings, not one specific class.",
+    "ocr_text": "Microsoft Teams has stopped working - Windows is checking for a solution",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-006",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "MGB",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Screen share option greyed out",
+    "message": "When I try to share my screen during a Teams call, the share button is greyed out and I can't click it. Everything else in the meeting works fine â€” audio, video, chat.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-007",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "Ladies Hostel D-Block",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "teams issue",
+    "message": "teams is not working properly today, kind of annoying, please look into it when you can",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-008",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SJT",
+    "room": "SJT-301",
+    "priority": "HIGH",
+    "subject": "Audio dropped for whole class in Teams meeting",
+    "message": "During our 2 PM CSE301 class on Teams today, my audio completely cut out around 15 minutes in â€” I can still see the video but hear nothing. I left and rejoined twice, same problem both times. At least two of my classmates mentioned the exact same thing happening to them in the chat. Using the desktop app on Windows.",
+    "ocr_text": "Teams meeting - You are muted (auto-generated)",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-009",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "No sound in today's class meeting",
+    "message": "In the 2pm class Teams call today the sound just stopped working for me partway through. A couple of others in the class chat said the same thing was happening to them around the same time.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-010",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "teams audio gone",
+    "message": "teams audio not working during class rn, sjt, anyone else having this issue too??",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-011",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "PRP",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "Teams completely frozen, can't do anything",
+    "message": "The Teams app has been frozen for the last 20 minutes â€” window is open but nothing responds, not even the close button. Had to force-quit through Task Manager. This is on the desktop app, Windows 11. No error message appeared before it froze, it just stopped responding across all functions.",
+    "ocr_text": "Teams (Not Responding)",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-012",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "Anna Auditorium",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Can't join a specific meeting link",
+    "message": "I can open Teams and log in fine, but when I click the specific meeting link my professor sent for today's seminar, it just says the meeting hasn't started yet even though others are already in it.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-013",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "AD Account Support",
+    "building": "GDN",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "teams login not working",
+    "message": "teams login not working, keeps saying wrong password, i think my account got locked or something",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-014",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SJT",
+    "room": "SJT-115",
+    "priority": "MEDIUM",
+    "subject": "Camera shows black screen in meetings",
+    "message": "My camera turns on (the light comes on) in Teams but all anyone sees is a black screen â€” no image. Tested on both the desktop app and the web browser version, same result both times. No error pops up when I turn the camera on.",
+    "ocr_text": "Camera preview unavailable",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-015",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Chat messages not sending in meeting",
+    "message": "During a meeting today, my chat messages weren't going through â€” I'd type and hit send but nothing would appear for the others. Rest of the meeting worked fine.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-016",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "teams problem",
+    "message": "having some issue with teams today, not sure what's wrong exactly but it's annoying",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-017",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": "TT Seminar Hall 2",
+    "priority": "HIGH",
+    "subject": "Teams crashed right before placement interview",
+    "message": "My Teams desktop app crashed twice in a row right as my placement interview slot was about to start in the TT seminar hall. It threw up an error saying 'Teams has stopped working' both times. I already tried reinstalling it once before this, but the crash is still happening on launch.",
+    "ocr_text": "Microsoft Teams has stopped working",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-018",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "App keeps crashing before interview",
+    "message": "Teams keeps crashing on my laptop â€” I was just about to join my placement interview here in the TT hall and it closed on its own, twice.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-019",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": "TT Seminar Hall 2",
+    "priority": "HIGH",
+    "subject": "Teams crashed during placement drive",
+    "message": "During today's placement drive in the TT seminar hall, Teams crashed right as my interview was starting. The error said something like 'Teams has stopped working, restart the app.' I restarted my laptop entirely and it still crashes the same way when I relaunch it.",
+    "ocr_text": "Teams has stopped working - restart the app",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-020",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "AD Account Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "cant sign into teams",
+    "message": "trying to sign into teams but it says access denied, your organization does not allow this account to sign in. not sure why, was working yesterday",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-021",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "Men's Hostel B-Block",
+    "room": "B-108",
+    "priority": "LOW",
+    "subject": "Can't hear others but they can hear me",
+    "message": "In today's meeting people said they could hear me fine, but I couldn't hear anyone else at all â€” checked my speaker volume, it's fine for everything else on my laptop. Happens on every call, not just this one. Using the Teams desktop app on Windows.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-022",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "Ladies Hostel C-Block",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Meeting link expired error",
+    "message": "I clicked on the Teams meeting link for my group project call and it says the meeting has expired, even though it's the time we scheduled it for. Can log into Teams fine otherwise.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-023",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "VIT Email Support",
+    "building": "MGB",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "cant login to teams",
+    "message": "cant login to teams, says incorrect password, need help pls",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-024",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "PRP",
+    "room": "PRP-204",
+    "priority": "HIGH",
+    "subject": "Teams crashes only during screen share",
+    "message": "Teams works fine normally, but the moment anyone starts sharing their screen in a meeting, my app freezes for about 10 seconds and then crashes entirely. This has happened in three different meetings now, always right at the start of a screen share. Desktop app, Windows 10, no error message shown before it crashes.",
+    "ocr_text": "Teams (Not Responding)",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-025",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Background blur option missing",
+    "message": "The background blur/effects button that used to be there before joining a meeting isn't showing up anymore. Everything else about joining works normally.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-026",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "teams glitchy",
+    "message": "teams has just been kind of glitchy for me lately, not sure how to explain it better than that",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-027",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": "TT-410",
+    "priority": "MEDIUM",
+    "subject": "Can join meetings but not the recurring team channel call",
+    "message": "I can join one-off Teams meetings without any problem, but every time I try to join our recurring project-team channel call specifically, I get kicked back to the lobby immediately with a message saying I don't have permission to join. Tested on both desktop app and mobile app, same result on both.",
+    "ocr_text": "You don't have permission to join this meeting",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "TEAMS-028",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "VIT Email Support",
+    "building": "GDN",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Teams sign in stuck loading",
+    "message": "Teams sign-in is stuck loading forever after I enter my VIT email and password, tried it like four times now",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-029",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "LOW",
+    "subject": "teams down?",
+    "message": "is teams down for anyone else or is it just me, not loading properly",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "TEAMS-030",
+    "category_selected": "Microsoft Teams Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "Anna Auditorium",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Notifications not showing up for new messages",
+    "message": "I've stopped getting any desktop notifications for new Teams chat messages over the past couple of days, even though the messages do show up when I open the app directly. Checked my Windows notification settings and Teams is allowed there. Only affects notifications, everything else about chat works.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  }
+]
+
+
+
+================================================
+FILE: data/eval/printer_support.json
+================================================
+[
+  {
+    "ticket_id": "PRN-001",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "SJT",
+    "room": "SJT-214",
+    "priority": "MEDIUM",
+    "subject": "printer not printing",
+    "message": "printer in our lab not working pls send someone",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "symptom", "scope", "connection_type", "error_message", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-002",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "TT",
+    "room": "TT-108",
+    "priority": "LOW",
+    "subject": "HP LaserJet showing offline",
+    "message": "The HP LaserJet P1108 in our faculty room has been showing as 'offline' on all our PCs since this morning around 9am. It was working fine yesterday evening. It's connected over the network, not USB. Haven't tried anything yet, wanted to check with you first before restarting it in case that causes other issues.",
+    "ocr_text": "Printer Status: Offline",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-003",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Admin Block",
+    "room": "AB-Ground Floor",
+    "priority": "HIGH",
+    "subject": "Paper jam, can't clear it, printer now unresponsive",
+    "message": "The Canon printer near the reception desk jammed about an hour ago while printing a batch of admission letters. We opened the tray and pulled out the visible torn paper but the printer now just shows a red blinking light and won't respond to anything, not even power cycling it twice. This is urgent since we have a stack of letters that need to go out today.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-004",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "print quality gone bad",
+    "message": "prints coming out with faded streaks lately, been like this for maybe 2-3 days now, thought it would fix itself but nope",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "scope", "connection_type", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-005",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "PRP",
+    "room": "PRP-B1",
+    "priority": "MEDIUM",
+    "subject": "Shared network printer unreachable from whole lab",
+    "message": "None of the 15 systems in PRP-B1 can print to the shared network printer (Xerox WorkCentre) as of about 11:00am today. Every system shows the same 'cannot connect to printer' error when you try to print, and this was working fine yesterday during the last session. We haven't changed any network settings on our end.",
+    "ocr_text": "Cannot connect to the printer. Check the printer name and try again.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-006",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "GDN",
+    "room": "GDN-201",
+    "priority": "LOW",
+    "subject": "spooler stuck",
+    "message": "sent a print job like an hour ago and it just sits there in queue, nothing comes out, tried sending again same thing happens, using the usb connected printer at the front desk",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started"]
+  },
+  {
+    "ticket_id": "PRN-007",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "printing super slow",
+    "message": "the printer takes forever to print even a single page, like 3-4 mins, this started recently, kinda annoying when you're in a hurry between classes",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "scope", "connection_type", "error_message", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-008",
+    "category_selected": "Printer Support",
+    "true_category": "AD Account Creation",
+    "building": "TT",
+    "room": "TT-Server Room",
+    "priority": "HIGH",
+    "subject": "Can't access print server, says permission denied",
+    "message": "Trying to add the department network printer on my new work laptop and it keeps giving 'access denied, contact your administrator' when I try to connect to the print server share (\\\\printsrv01). I can browse other network shares fine, just not this one. My account was created only two days ago so wondering if it's a permissions/group thing on the account side rather than the printer itself.",
+    "ocr_text": "Access is denied. Contact your system administrator.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-009",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Men's Hostel A",
+    "room": "A-Ground Floor",
+    "priority": "LOW",
+    "subject": "printer eating pages",
+    "message": "printer keeps jamming almost every 2nd or 3rd page today, have to keep opening it and pulling paper out, wastes a lot of time",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "connection_type"]
+  },
+  {
+    "ticket_id": "PRN-010",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Ladies Hostel D",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "printer totally dead, no lights at all",
+    "message": "hostel common room printer isnt turning on at all, checked the switch and cable, still nothing, might be the printer itself thats dead",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "connection_type", "error_message", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-011",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "SJT",
+    "room": "SJT-Faculty Room 2",
+    "priority": "MEDIUM",
+    "subject": "Wireless printer dropped from network after Wi-Fi update",
+    "message": "Our HP OfficeJet in the faculty room was working over Wi-Fi until yesterday, but this morning it's no longer showing up in the printer list on any of our laptops. We heard there was some Wi-Fi maintenance done overnight â€” could that have knocked the printer off the network? Haven't tried re-adding it yet since we're not sure of the correct network name to select.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-012",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Admin Block",
+    "room": "AB-HR Wing",
+    "priority": "HIGH",
+    "subject": "Printer near HR down, second report today",
+    "message": "Following up on this â€” the same printer near the HR wing that was reported jammed earlier this morning is now completely unresponsive, red light blinking, no response to power cycling. We really need this working, we have a stack of admission letters that must go out today without fail.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-013",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "PRP",
+    "room": "PRP-B1",
+    "priority": "HIGH",
+    "subject": "None of our systems can print, urgent, batch has practicals starting soon",
+    "message": "This is PRP-B1 lab reporting â€” every single machine here is failing to print to our usual shared printer, error says can't connect. We double-checked and it was fine during yesterday's session, nothing changed on our side. We have a practical exam batch coming in within the hour and need to print question sheets.",
+    "ocr_text": "Cannot connect to the printer. Check the printer name and try again.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-014",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "GDN",
+    "room": "GDN-Reception",
+    "priority": "MEDIUM",
+    "subject": "toner low warning but prints are blank",
+    "message": "printer showing low toner warning for a while, now pages come out completely blank, tried printing 3 times same result",
+    "ocr_text": "Toner Low",
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "connection_type"]
+  },
+  {
+    "ticket_id": "PRN-015",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "TT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "not printing",
+    "message": "cant print, its urgent",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "symptom", "scope", "connection_type", "error_message", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-016",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "SMV",
+    "room": "SMV-201",
+    "priority": "MEDIUM",
+    "subject": "Driver seems corrupted after Windows update",
+    "message": "After a Windows update installed itself automatically last night, the Canon printer driver on my office PC seems broken â€” printing throws 'print spooler service is not running' and I can't start the service manually either, it just fails immediately. This is a USB-connected printer, worked completely fine before the update. Tried restarting the PC twice, same issue persists.",
+    "ocr_text": "The Print Spooler service is not running. Windows could not start the Print Spooler service on Local Computer. Error 1068.",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-017",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "CDMM",
+    "room": "CDMM-G2",
+    "priority": "MEDIUM",
+    "subject": "double sided printing not working",
+    "message": "when i select duplex print it just prints one side and stops, have to manually flip pages, this started a couple days back i think, using the shared network printer here",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "scope", "error_message"]
+  },
+  {
+    "ticket_id": "PRN-018",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Men's Hostel A",
+    "room": "A-201",
+    "priority": "LOW",
+    "subject": "weird lines across every printout",
+    "message": "every page that comes out has these thin vertical lines running down it, even blank pages sometimes, not sure what's causing it, been happening on and off for about a week",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "connection_type", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-019",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Ladies Hostel D",
+    "room": "D-Common Room",
+    "priority": "MEDIUM",
+    "subject": "Printer works for some, not for others in same room",
+    "message": "Odd issue â€” the common room printer prints fine when I send from my laptop but two of my wingmates get 'access denied' errors trying to print from theirs, all of us on the same hostel Wi-Fi. Started sometime yesterday evening. None of us have changed any settings recently that we know of.",
+    "ocr_text": "Access denied. You do not have permission to print to this printer.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-020",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Admin Block",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "printer asking for a code i dont have",
+    "message": "trying to print and it wants a release code or pin on the screen, never had to do this before, dont know what code its asking for",
+    "ocr_text": "Enter Release Code:",
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "scope", "connection_type", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-021",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "SJT",
+    "room": "SJT-909",
+    "priority": "HIGH",
+    "subject": "Ricoh copier-printer combo completely down, affects whole floor",
+    "message": "The Ricoh MP2014 copier-printer combo on the 9th floor of SJT has stopped working entirely since around 2pm â€” screen shows a black error panel with a code SC542, and nothing we do (power cycling, checking cables) clears it. This is the only printer on the floor so basically everyone up here is affected right now, at least 5-6 different people have already tried and failed to print in the last half hour.",
+    "ocr_text": "SC542: Contact Service Representative",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-022",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "PRP",
+    "room": null,
+    "priority": "LOW",
+    "subject": "colors printing wrong",
+    "message": "print outs coming out with wrong colors lately, blues look more like purple, kind of annoying for our diagrams",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "scope", "connection_type", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-023",
+    "category_selected": "Printer Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "GDN",
+    "room": "GDN-305",
+    "priority": "MEDIUM",
+    "subject": "Wireless printer keeps disconnecting, might not be printer's fault",
+    "message": "Our wireless printer in GDN-305 loses connection every 10-15 minutes throughout the day, but now I'm noticing my laptop's own Wi-Fi also drops around the same times, so I'm wondering if this is actually a building Wi-Fi stability issue rather than something wrong with the printer itself. Been going on for two days now.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-024",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "TT",
+    "room": "TT-303",
+    "priority": "MEDIUM",
+    "subject": "cartridge replaced but still not printing",
+    "message": "we changed the toner cartridge this morning like the manual said since it was flashing empty, but it's still not printing anything, just makes a grinding noise now when we try",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "connection_type", "error_message"]
+  },
+  {
+    "ticket_id": "PRN-025",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "LOW",
+    "subject": "printer help",
+    "message": "printer problem again, someone come check pls",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "symptom", "scope", "connection_type", "error_message", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-026",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "CDMM",
+    "room": "CDMM-3rd Floor",
+    "priority": "HIGH",
+    "subject": "Same Ricoh error appearing here too, 9th... no wait different floor",
+    "message": "Hi, just want to flag that our Ricoh copier here on the 3rd floor is showing an identical SC542 black error screen as apparently reported for another floor. Power cycled twice, checked all connections, no change. Whole floor is stuck without printing access right now, we have back to back faculty meetings needing handouts.",
+    "ocr_text": "SC542: Contact Service Representative",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-027",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Men's Hostel A",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "printer stuck mid print",
+    "message": "printer got stuck halfway through a page, motor sound going but nothing moving, first time seeing this happen",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started", "scope", "connection_type", "troubleshooting_done"]
+  },
+  {
+    "ticket_id": "PRN-028",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Admin Block",
+    "room": "AB-Records Room",
+    "priority": "HIGH",
+    "subject": "Second Ricoh unit also throwing SC542, seems like a pattern",
+    "message": "Reporting from the records room â€” our Ricoh printer just started showing the SC542 black-screen error about ten minutes ago, exact same code I heard mentioned in another department's complaint earlier today. We've tried the standard power-cycle fix with no luck. Whole records team is blocked from printing right now and we have document requests piling up.",
+    "ocr_text": "SC542: Contact Service Representative",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-029",
+    "category_selected": "Printer Support",
+    "true_category": "AD Account Creation",
+    "building": "SJT",
+    "room": "SJT-Faculty Room 1",
+    "priority": "MEDIUM",
+    "subject": "New printer added but says my login isn't recognized",
+    "message": "IT installed a new departmental printer yesterday and when I try to add it on my laptop it asks me to authenticate, but my usual campus login (username v.raghavan) gets rejected with 'user not found' even though I use the exact same credentials for everything else without any problem. Wondering if the printer's authentication is somehow not synced with the AD directory properly, or if there's something off with my account specifically.",
+    "ocr_text": "User not found. Please check your credentials and try again.",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "PRN-030",
+    "category_selected": "Printer Support",
+    "true_category": "Printer Support",
+    "building": "Ladies Hostel D",
+    "room": "D-101",
+    "priority": "LOW",
+    "subject": "extra blank page after every print",
+    "message": "small thing but annoying â€” every time i print something it also spits out an extra blank page right after, wasting paper, been happening for a few days on the usb printer",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["printer_model", "when_started"]
+  }
+]
+
+
+
+
+
+================================================
+FILE: data/eval/vit_email.json
+================================================
+[
+  {
+    "ticket_id": "EMAIL-001",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email not working",
+    "message": "my vit email is not working since morning, pls check",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-002",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "TT",
+    "room": "TT-301",
+    "priority": "LOW",
+    "subject": "Can't send emails with attachments",
+    "message": "I can receive emails fine but whenever I try to send one with an attachment, it just gets stuck loading and never actually sends. Happens on webmail every time I try.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal"]
+  },
+  {
+    "ticket_id": "EMAIL-003",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Mailbox full, can't receive new mail",
+    "message": "I stopped getting any new emails two days ago. Checked and it turns out my mailbox storage is completely full. This is on webmail, haven't tried the Outlook app yet. Need help clearing space or increasing quota.",
+    "ocr_text": "Mailbox quota exceeded - 2.00 GB of 2.00 GB used",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-004",
+    "category_selected": "VIT Email Support",
+    "true_category": "AD Account Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "email not opening",
+    "message": "email not opening, it says my account is locked, not sure why, need this fixed today",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-005",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Men's Hostel A-Block",
+    "room": "A-214",
+    "priority": "MEDIUM",
+    "subject": "Outlook app not syncing new mail",
+    "message": "The Outlook app on my laptop hasn't pulled in any new emails for the past day and a half, even though I can see the new messages fine when I log into webmail directly on the browser. Tried removing and re-adding the account once already, no change. This is across my whole inbox, not one folder.",
+    "ocr_text": "Outlook - Disconnected. Retrying...",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-006",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "MGB",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Emails going to spam that shouldn't be",
+    "message": "Important emails from my faculty advisor keep landing in my spam folder instead of the inbox. Everything else about my email seems to work normally.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-007",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Ladies Hostel D-Block",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email issue",
+    "message": "something is wrong with my email today, not loading properly, can someone check",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-008",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SJT",
+    "room": "SJT-118",
+    "priority": "HIGH",
+    "subject": "No emails coming in since this morning",
+    "message": "I haven't received a single email since around 9 AM today, and it's now past noon. I checked spam, nothing there either. Tried logging out and back into webmail, still nothing. A couple of my classmates in SJT mentioned the exact same thing is happening to them right now too.",
+    "ocr_text": "Inbox - Last synced 3 hours ago",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-009",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "Not getting any new mail today",
+    "message": "My email hasn't received anything new since this morning, which is odd since I usually get a bunch of course notifications by now. A few people around me in SJT said their email is doing the same thing today.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-010",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email not coming",
+    "message": "no new emails since morning in sjt, is this happening for others too or just me",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-011",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "PRP",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Auto-forwarding rule not working",
+    "message": "I set up a rule a while back to auto-forward emails from a specific sender to my personal email, and it just stopped working sometime this week. Checked the rule in settings and it's still there and enabled, but nothing's actually being forwarded anymore. This is only affecting that one rule, everything else in my inbox works fine.",
+    "ocr_text": "Rule 'Forward to personal' - Last run: never",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-012",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Anna Auditorium",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Signature not showing up on sent mail",
+    "message": "I set up an email signature in settings but it's not appearing on any of the emails I send, from webmail or the mobile app. Everything else about sending mail works normally.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal"]
+  },
+  {
+    "ticket_id": "EMAIL-013",
+    "category_selected": "VIT Email Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "GDN",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email opening into weird page",
+    "message": "trying to check my vit email but it opens into some old teams meeting page instead, weird, cant see my inbox at all",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-014",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SJT",
+    "room": "SJT-220",
+    "priority": "MEDIUM",
+    "subject": "Password reset link expired immediately",
+    "message": "I requested a password reset link for my email and clicked it right away, less than a minute after it arrived, but it says the link has already expired. Tried requesting a fresh one twice more, same result both times. This is on the webmail reset page specifically.",
+    "ocr_text": "This password reset link has expired",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-015",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "TT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Attachments not downloading",
+    "message": "Whenever I try to download an attachment from an email, the download just spins forever and never completes. Rest of my inbox works fine, I can read and reply to emails normally.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-016",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email acting weird",
+    "message": "my email has just been kind of acting up lately, hard to explain exactly what's wrong",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-017",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Ladies Hostel C-Block",
+    "room": "C-112",
+    "priority": "HIGH",
+    "subject": "Password reset OTP never arrives",
+    "message": "I've been trying to reset my email password since last night â€” every time I request the OTP, it just never shows up, not in my personal email or as an SMS. Tried this about five times now over the past 12 hours, still nothing. A couple of my hostel-mates said the exact same OTP issue happened to them too around the same time.",
+    "ocr_text": "OTP sent successfully to your registered contact",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-018",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Ladies Hostel C-Block",
+    "room": null,
+    "priority": "HIGH",
+    "subject": "OTP for password reset not coming",
+    "message": "Requested a password reset OTP for my email multiple times last night and it's still not arriving. Some other girls on my floor mentioned they were having the same problem trying to reset theirs too.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-019",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Ladies Hostel C-Block",
+    "room": "C-108",
+    "priority": "HIGH",
+    "subject": "Reset OTP never delivered",
+    "message": "Locked out of my email so I tried the password reset flow, but the OTP just never comes through no matter how many times I request it â€” checked spam too. This has been going on since last night. A few others in my block on the same floor said theirs is doing the exact same thing right now.",
+    "ocr_text": "OTP sent successfully to your registered contact",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-020",
+    "category_selected": "VIT Email Support",
+    "true_category": "AD Account Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "stuck on email sign in page",
+    "message": "Stuck on the email sign-in page, it just says 'Account temporarily disabled, contact administrator' after I enter my password.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-021",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Men's Hostel B-Block",
+    "room": "B-108",
+    "priority": "LOW",
+    "subject": "Old emails disappeared from inbox",
+    "message": "A bunch of my older emails from last semester just aren't showing up in my inbox anymore, though search still finds a few of them. Checked the archive and trash folders too, they're not there either. This is only affecting older mail, everything recent is fine.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-022",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "PRP",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Can't add my VIT email to phone",
+    "message": "Trying to add my VIT email account to the mail app on my new phone and it keeps failing at the server settings step, even though the same login works fine on webmail. Not sure what settings it wants exactly.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal"]
+  },
+  {
+    "ticket_id": "EMAIL-023",
+    "category_selected": "VIT Email Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "MGB",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email keeps opening a call window",
+    "message": "email keeps opening a teams call window instead of my inbox, no idea why, kind of urgent",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-024",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "PRP",
+    "room": "PRP-204",
+    "priority": "HIGH",
+    "subject": "Sent emails stuck in Outbox",
+    "message": "Every email I try to send from the Outlook desktop app just sits in the Outbox and never actually goes out, even after leaving it for hours. Sending the exact same email through webmail instead works fine. This is happening for every message, not just one specific email. Windows 11, Outlook desktop.",
+    "ocr_text": "Outbox (14) - Sending... (stalled)",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-025",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Calendar invites not showing meeting details",
+    "message": "When I get a calendar invite by email, opening it just shows a blank event with no location or agenda details, even though the sender says they included them. Rest of my email works completely normally.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-026",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email glitchy today",
+    "message": "email has just been kind of glitchy today, not totally sure what's going on with it",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-027",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "TT",
+    "room": "TT-410",
+    "priority": "MEDIUM",
+    "subject": "Can log in but one folder won't load",
+    "message": "My inbox and all other folders load fine, but the moment I click on my 'Placements' folder specifically, it just spins forever and never shows any emails. Tried this on both webmail and the mobile app, same result both times.",
+    "ocr_text": "Loading folder... (this is taking longer than usual)",
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "EMAIL-028",
+    "category_selected": "VIT Email Support",
+    "true_category": "AD Account Support",
+    "building": "GDN",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "email login just spins then fails",
+    "message": "Trying to log into my VIT email but it just spins and then says 'Your account has been suspended', not sure what happened.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["scope", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-029",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "LOW",
+    "subject": "email down?",
+    "message": "is email down for anyone else or just me, not loading right now",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["failure_type", "scope", "error_signal", "device_platform"]
+  },
+  {
+    "ticket_id": "EMAIL-030",
+    "category_selected": "VIT Email Support",
+    "true_category": "VIT Email Support",
+    "building": "Anna Auditorium",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Not getting notification sounds for new mail",
+    "message": "I've stopped getting the notification sound and popup for new emails on my laptop over the past few days, even though the emails do show up fine when I open the inbox directly. Checked my Windows notification settings and the mail app is allowed there. Everything else about email works normally, it's just the notifications.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  }
+]
+
+
+
+================================================
+FILE: data/eval/wifi_internet.json
+================================================
+
+[
+  {
+    "ticket_id": "WIFI-001",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "wifi issue",
+    "message": "wifi not working pls help",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "when_started", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-002",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Ladies Hostel C-Block",
+    "room": "C-214",
+    "priority": "HIGH",
+    "subject": "No internet on any device in my room since last night",
+    "message": "None of my devices are getting internet since around 9pm yesterday â€” laptop, phone, and my roommate's phone too. We can see the VIT WiFi network and it connects, but nothing loads, not even WhatsApp. Restarted the laptop twice, toggled wifi off and on, moved closer to the corridor AP, nothing changes. Roommate's phone shows 'connected, no internet' as well. Attaching a screenshot of the error.",
+    "ocr_text": "Wi-Fi: Connected, no internet",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-003",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Men's Hostel A-Block",
+    "room": "A-310",
+    "priority": "LOW",
+    "subject": "Laptop wifi drops every few minutes",
+    "message": "Since this afternoon my laptop keeps dropping off the wifi every 5-10 minutes and I have to manually reconnect each time. Only happening on this one laptop, my phone is fine on the same network.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["ssid"]
+  },
+  {
+    "ticket_id": "WIFI-004",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "AD Account Creation",
+    "building": "CDMM",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "wifi login page keeps rejecting my password",
+    "message": "Whenever I try to connect to the campus wifi it takes me to a login page and my password gets rejected every single time, even though I'm 100% sure it's correct. Tried retyping it slowly like 5 times now.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "single_or_multiple_devices"]
+  },
+  {
+    "ticket_id": "WIFI-005",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "TT",
+    "room": "TT-105",
+    "priority": "LOW",
+    "subject": "Have to reconnect to wifi every time I open my laptop",
+    "message": "My laptop (Windows 11) loses its wifi connection every time it goes to sleep or I close the lid. When I reopen it I have to manually click reconnect on VIT WiFi and it works fine after that. Been happening for about a week, only on this laptop, other people's devices seem okay.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-006",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Food Court",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "no internet here",
+    "message": "no internet at all here",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "when_started", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-007",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "GDN",
+    "room": "GDN-220",
+    "priority": "HIGH",
+    "subject": "Video calls keep freezing, wifi drops mid-call",
+    "message": "I have back to back online interviews today and the wifi keeps cutting out right in the middle of video calls â€” screen freezes, audio cuts, then it reconnects after 10-15 seconds. Happened 4 times in the last hour alone. Using VIT WiFi on my laptop.",
+    "ocr_text": "Uploading screenshot: teams_call_reconnecting.png",
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["when_started"]
+  },
+  {
+    "ticket_id": "WIFI-008",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Men's Hostel D-Block",
+    "room": "D-118",
+    "priority": "HIGH",
+    "subject": "Entire floor lost wifi around 7pm",
+    "message": "Around 7:05pm tonight the wifi just dropped for everyone on our floor at the same time. Nobody can connect at all now, not even the login page loads. My roommates are having the exact same issue.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["device_type"]
+  },
+  {
+    "ticket_id": "WIFI-009",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Men's Hostel D-Block",
+    "room": "D-204",
+    "priority": "MEDIUM",
+    "subject": "wifi down whole block",
+    "message": "hostel wifi completely down since 7ish, whole d block affected not just me",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": ["device_type", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-010",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Men's Hostel D-Block",
+    "room": "D-310",
+    "priority": "HIGH",
+    "subject": "D-Block wifi outage, since 7pm, whole floor",
+    "message": "Since 7pm the wifi has been completely down across D-Block â€” I've checked with at least six other guys on my floor and everyone's affected, both phones and laptops, no exceptions. Screenshot attached showing the connection error. Please treat this as urgent, we all have assignments due tonight.",
+    "ocr_text": "Unable to join this network",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-011",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SMV",
+    "room": "SMV-206",
+    "priority": "LOW",
+    "subject": "Phone won't join VIT WiFi 5GHz, works fine on 2.4GHz",
+    "message": "My phone refuses to connect to the VIT WiFi 5GHz band specifically â€” just sits on 'obtaining IP address' and times out. Weirdly the 2.4GHz band works perfectly fine on the same phone, same location, since this morning.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-012",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "VIT Email Support",
+    "building": "MB",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "internet works but outlook won't sync",
+    "message": "Wifi seems totally fine, I can browse and stream videos no problem, but Outlook has stopped syncing new mail since yesterday and just shows a spinning icon. Figured it's a network issue somehow?",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "single_or_multiple_devices"]
+  },
+  {
+    "ticket_id": "WIFI-013",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Library",
+    "room": null,
+    "priority": "LOW",
+    "subject": "wifi keeps disconnecting",
+    "message": "wifi keeps disconnecting on and off, kind of annoying",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "when_started", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-014",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Ladies Hostel G-Block",
+    "room": "G-402",
+    "priority": "HIGH",
+    "subject": "Laptop wifi adapter possibly dead",
+    "message": "For the past three days my laptop shows 'no wifi networks found' at all, no networks listed whatsoever, not even other people's phone hotspots nearby. Reinstalled the driver, ran the Windows network troubleshooter, updated Windows, even tried a different location entirely â€” nothing shows up. Every other device around me connects fine. I think the adapter itself might be dead. Screenshot of the empty network list attached.",
+    "ocr_text": "No networks found",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-015",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SJT",
+    "room": "SJT-412",
+    "priority": "MEDIUM",
+    "subject": "Very slow internet since morning",
+    "message": "Internet has been really slow since this morning, pages take forever to load. Just my laptop as far as I can tell, connected to VIT WiFi.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-016",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SJT",
+    "room": "SJT-301",
+    "priority": "HIGH",
+    "subject": "Wifi keeps dropping during 10am class, whole classroom",
+    "message": "During our 10am class today the wifi has been dropping every couple of minutes for basically everyone in the room â€” I counted at least 15 classmates with the same issue, all on VIT WiFi. Our professor couldn't even load the shared slides properly. Screenshot attached showing repeated disconnects.",
+    "ocr_text": "Connection lost. Reconnecting...",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-017",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SJT",
+    "room": "SJT-305",
+    "priority": "MEDIUM",
+    "subject": "3rd floor SJT wifi very unstable this morning",
+    "message": "Around 10:20am the wifi on the 3rd floor of SJT started acting up badly, dropping constantly. It's not just my laptop, I checked with a couple of classmates next door and they're having the same problem right now.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": ["device_type"]
+  },
+  {
+    "ticket_id": "WIFI-018",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SJT",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "wifi not working 3rd floor",
+    "message": "wifi on 3rd floor sjt not working for anyone, been like this since around 10:40",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_2",
+    "missing_fields": ["device_type", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-019",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "CDMM",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "Internet down, need help please",
+    "message": "Hi, could someone please look into this â€” the internet seems to be down on my end since this morning. Would appreciate any help, thank you.",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-020",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Microsoft Teams Support",
+    "building": "TT",
+    "room": null,
+    "priority": "LOW",
+    "subject": "wifi is fine but nothing loads in teams",
+    "message": "wifi is fine, everything else works, but teams just spins and nothing loads inside it. weird",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "when_started", "single_or_multiple_devices"]
+  },
+  {
+    "ticket_id": "WIFI-021",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Men's Hostel A-Block",
+    "room": "A-118",
+    "priority": "LOW",
+    "subject": "Connects to wifi but says no internet access",
+    "message": "My laptop connects to VIT WiFi fine and shows full bars, but says 'no internet access' underneath and nothing loads. Started this morning after I updated Windows. Just this one laptop, phone is working normally.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-022",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "GDN",
+    "room": "GDN-110",
+    "priority": "HIGH",
+    "subject": "Multiple laptops can't connect in our room",
+    "message": "None of the four laptops in our room can see or connect to VIT WiFi since this afternoon, though phones seem okay. We're guessing the AP nearby might be down. Screenshot attached from one of the laptops.",
+    "ocr_text": "Can't connect to this network",
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["symptom_type"]
+  },
+  {
+    "ticket_id": "WIFI-023",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Ladies Hostel C-Block",
+    "room": "C-119",
+    "priority": "MEDIUM",
+    "subject": "Phone drops wifi every few minutes since yesterday",
+    "message": "My phone keeps dropping off VIT WiFi every 3-4 minutes, been happening since yesterday evening. It's only this phone, my laptop on the same network is completely fine. Forgetting and rejoining the network usually fixes it for a while.",
+    "ocr_text": null,
+    "completeness_level": "complete",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-024",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Food Court",
+    "room": null,
+    "priority": "LOW",
+    "subject": "cant connect to wifi at all",
+    "message": "ok this is getting really frustrating, cant connect to wifi at all today, tried everything I know",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "when_started", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-025",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "AD Account Creation",
+    "building": "MB",
+    "room": "MB-210",
+    "priority": "MEDIUM",
+    "subject": "Captive portal says invalid credentials every time",
+    "message": "Every time I try to log into the wifi captive portal it says 'invalid credentials' even though I've triple-checked my registration number and password. Tried on both my phone and laptop with the same result, so I don't think it's a device problem. I suspect my account itself might be locked since I changed my password recently on the student portal. Attaching a screenshot of the exact error.",
+    "ocr_text": "Error: Invalid username or password",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-026",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "SMV",
+    "room": null,
+    "priority": "LOW",
+    "subject": "Wifi gets really slow every evening",
+    "message": "Every day around 8-9pm the wifi slows down a lot, videos won't even load. It's fine during the day. Been noticing this pattern for a few days now.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "single_or_multiple_devices"]
+  },
+  {
+    "ticket_id": "WIFI-027",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "TT",
+    "room": "TT-220",
+    "priority": "HIGH",
+    "subject": "Entire lab has no internet, urgent",
+    "message": "The whole lab (about 30 systems) has no internet access right now, started roughly an hour ago. All machines show connected to the network but nothing loads, including internal portals. We suspect the switch or AP serving this lab has gone down. This is blocking an ongoing practical session, please escalate. Screenshot attached from one of the lab PCs.",
+    "ocr_text": "Ethernet: No internet access",
+    "completeness_level": "complete",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": []
+  },
+  {
+    "ticket_id": "WIFI-028",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "VIT Email Support",
+    "building": "Library",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "wifi problem, cant send mails",
+    "message": "wifi problem i think, cant send mails from my account since morning",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "symptom_type", "single_or_multiple_devices"]
+  },
+  {
+    "ticket_id": "WIFI-029",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "Ladies Hostel G-Block",
+    "room": null,
+    "priority": "MEDIUM",
+    "subject": "issues since some days",
+    "message": "so basically I've been having some issues, not sure exactly what's going on, sometimes it works sometimes it doesn't, also my laptop has been kind of slow in general lately not sure if related, anyway just wanted to flag this",
+    "ocr_text": null,
+    "completeness_level": "vague",
+    "is_deflectable": false,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["device_type", "when_started", "symptom_type", "single_or_multiple_devices", "ssid"]
+  },
+  {
+    "ticket_id": "WIFI-030",
+    "category_selected": "Wifi/Internet Support",
+    "true_category": "Wifi/Internet Support",
+    "building": "CDMM",
+    "room": "CDMM-301",
+    "priority": "LOW",
+    "subject": "Lost wifi after windows update",
+    "message": "After a Windows update last night my laptop lost its saved wifi connection and now won't auto-reconnect to VIT WiFi â€” I have to manually enter the password each time. Just this laptop, everything else at home... I mean hostel, is fine.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": true,
+    "duplicate_cluster_id": null,
+    "missing_fields": ["single_or_multiple_devices"]
+  }
+]
+
+
+
+================================================
+FILE: results/agent1_eval_results.csv
+================================================
+ticket_id,expected_category,predicted_category,category_correct,completeness_level_expected,completeness_score_predicted,completeness_bucket_match,missing_fields_expected,missing_fields_predicted,error
+WIFI-001,wifi_internet,wifi_internet,True,vague,0.0,True,device_type;when_started;symptom_type;single_or_multiple_devices;ssid,symptom_type;single_or_multiple_devices;when_started;device_type;ssid,
+WIFI-002,wifi_internet,wifi_internet,True,complete,0.8333,True,,device_type,
+WIFI-003,wifi_internet,wifi_internet,True,partial,0.8611,False,ssid,ssid,
+WIFI-004,ad_account_creation,wifi_internet,False,partial,0.25,False,device_type;single_or_multiple_devices,single_or_multiple_devices;when_started;device_type;ssid,
+WIFI-005,wifi_internet,wifi_internet,True,complete,1.0,True,,,
+WIFI-006,wifi_internet,wifi_internet,True,vague,0.2639,True,device_type;when_started;symptom_type;single_or_multiple_devices;ssid,single_or_multiple_devices;when_started;device_type;ssid,
+WIFI-007,wifi_internet,wifi_internet,True,partial,0.7347,True,when_started,single_or_multiple_devices,
+WIFI-008,wifi_internet,wifi_internet,True,partial,0.6347,True,device_type,device_type;ssid,
+WIFI-009,wifi_internet,wifi_internet,True,vague,0.8056,False,device_type;symptom_type;single_or_multiple_devices;ssid,device_type,
+WIFI-010,wifi_internet,wifi_internet,True,complete,0.6944,False,,device_type;ssid,
+WIFI-011,wifi_internet,wifi_internet,True,complete,0.7778,True,,single_or_multiple_devices,
+WIFI-012,vit_email,wifi_internet,False,partial,0.1847,False,device_type;single_or_multiple_devices,symptom_type;single_or_multiple_devices;device_type;ssid,
+WIFI-013,wifi_internet,wifi_internet,True,vague,0.4056,False,device_type;when_started;single_or_multiple_devices;ssid,single_or_multiple_devices;device_type;ssid,
+WIFI-014,wifi_internet,wifi_internet,True,complete,0.8389,True,,ssid,
+WIFI-015,wifi_internet,wifi_internet,True,partial,0.6667,True,,symptom_type,
+WIFI-016,wifi_internet,wifi_internet,True,complete,0.8333,True,,device_type,
+WIFI-017,wifi_internet,wifi_internet,True,partial,0.7736,False,device_type,device_type,
+WIFI-018,wifi_internet,wifi_internet,True,vague,0.8194,False,device_type;symptom_type;single_or_multiple_devices;ssid,device_type,
+WIFI-019,wifi_internet,wifi_internet,True,vague,0.1847,True,device_type;symptom_type;single_or_multiple_devices;ssid,symptom_type;single_or_multiple_devices;device_type;ssid,
+WIFI-020,ms_teams,ms_teams,True,vague,0.0,True,device_type;when_started;single_or_multiple_devices,failure_type;scope;error_signal;device_platform,
+WIFI-021,wifi_internet,wifi_internet,True,complete,1.0,True,,,
+WIFI-022,wifi_internet,wifi_internet,True,partial,0.7778,False,symptom_type,device_type,
+WIFI-023,wifi_internet,wifi_internet,True,complete,0.95,True,,,
+WIFI-024,wifi_internet,wifi_internet,True,vague,0.175,True,device_type;when_started;symptom_type;single_or_multiple_devices;ssid,symptom_type;single_or_multiple_devices;device_type;ssid,
+WIFI-025,ad_account_creation,wifi_internet,False,complete,0.5722,False,,when_started;device_type,
+WIFI-026,wifi_internet,wifi_internet,True,partial,0.425,True,device_type;single_or_multiple_devices,single_or_multiple_devices;device_type;ssid,
+WIFI-027,wifi_internet,wifi_internet,True,complete,0.6458,False,,device_type;ssid,
+WIFI-028,vit_email,,False,vague,0.0,True,device_type;symptom_type;single_or_multiple_devices,symptom_or_error;when_started;scope,
+WIFI-029,wifi_internet,,False,vague,0.0,True,device_type;when_started;symptom_type;single_or_multiple_devices;ssid,symptom_or_error;when_started;scope,
+WIFI-030,wifi_internet,wifi_internet,True,partial,0.925,False,single_or_multiple_devices,,
+TEAMS-001,ms_teams,ms_teams,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+TEAMS-002,ms_teams,ms_teams,True,partial,0.4903,True,error_signal,scope;error_signal,
+TEAMS-003,ms_teams,ms_teams,True,complete,0.7419,False,,scope,
+TEAMS-004,vit_email,ms_teams,False,vague,0.2145,True,scope;error_signal;device_platform,failure_type;scope;device_platform,
+TEAMS-005,ms_teams,ms_teams,True,complete,0.7161,False,,scope,
+TEAMS-006,ms_teams,ms_teams,True,partial,0.2258,False,error_signal;device_platform,failure_type;scope;device_platform,
+TEAMS-007,ms_teams,ms_teams,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+TEAMS-008,ms_teams,ms_teams,True,complete,0.8968,True,,,
+TEAMS-009,ms_teams,ms_teams,True,partial,0.5387,True,error_signal;device_platform,error_signal;device_platform,
+TEAMS-010,ms_teams,ms_teams,True,vague,0.5548,False,error_signal;device_platform,error_signal;device_platform,
+TEAMS-011,ms_teams,ms_teams,True,complete,0.7126,False,,scope,
+TEAMS-012,ms_teams,ms_teams,True,partial,0.2145,False,device_platform,failure_type;scope;device_platform,
+TEAMS-013,,ms_teams,False,vague,0.2032,True,scope;error_signal;device_platform,failure_type;scope;device_platform,
+TEAMS-014,ms_teams,ms_teams,True,complete,0.7661,True,,device_platform,
+TEAMS-015,ms_teams,ms_teams,True,partial,0.5097,True,error_signal;device_platform,error_signal;device_platform,
+TEAMS-016,ms_teams,ms_teams,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+TEAMS-017,ms_teams,ms_teams,True,complete,0.4194,False,,failure_type;scope,
+TEAMS-018,ms_teams,ms_teams,True,partial,0.4903,True,error_signal;device_platform,scope;error_signal,
+TEAMS-019,ms_teams,ms_teams,True,complete,0.4194,False,,failure_type;scope,
+TEAMS-020,,ms_teams,False,partial,0.2258,False,scope;device_platform,failure_type;scope;device_platform,
+TEAMS-021,ms_teams,ms_teams,True,complete,0.6968,False,,error_signal,
+TEAMS-022,ms_teams,ms_teams,True,partial,0.2145,False,scope;device_platform,failure_type;scope;device_platform,
+TEAMS-023,vit_email,ms_teams,False,vague,0.2258,True,scope;error_signal;device_platform,failure_type;scope;device_platform,
+TEAMS-024,ms_teams,ms_teams,True,complete,0.7032,False,,scope,
+TEAMS-025,ms_teams,ms_teams,True,partial,0.2903,False,error_signal;device_platform,scope;error_signal;device_platform,
+TEAMS-026,ms_teams,ms_teams,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+TEAMS-027,ms_teams,ms_teams,True,complete,0.7161,False,,scope,
+TEAMS-028,vit_email,ms_teams,False,partial,0.0,False,scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+TEAMS-029,ms_teams,ms_teams,True,vague,0.5387,False,failure_type;scope;error_signal;device_platform,error_signal;device_platform,
+TEAMS-030,ms_teams,ms_teams,True,complete,0.4742,False,,scope;error_signal,
+EMAIL-001,vit_email,vit_email,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+EMAIL-002,vit_email,vit_email,True,partial,0.4742,True,error_signal,scope;error_signal,
+EMAIL-003,vit_email,vit_email,True,complete,0.7065,False,,scope,
+EMAIL-004,,vit_email,False,vague,0.2145,True,scope;error_signal;device_platform,failure_type;scope;device_platform,
+EMAIL-005,vit_email,vit_email,True,complete,0.9226,True,,,
+EMAIL-006,vit_email,vit_email,True,partial,0.2903,False,error_signal;device_platform,scope;error_signal;device_platform,
+EMAIL-007,vit_email,vit_email,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+EMAIL-008,vit_email,vit_email,True,complete,0.7532,True,,device_platform,
+EMAIL-009,vit_email,vit_email,True,partial,0.5387,True,error_signal;device_platform,error_signal;device_platform,
+EMAIL-010,vit_email,vit_email,True,vague,0.2323,True,error_signal;device_platform,failure_type;error_signal;device_platform,
+EMAIL-011,vit_email,vit_email,True,complete,0.7371,False,,device_platform,
+EMAIL-012,vit_email,vit_email,True,partial,0.5387,True,error_signal,error_signal;device_platform,
+EMAIL-013,ms_teams,vit_email,False,vague,0.2032,True,failure_type;scope;error_signal;device_platform,failure_type;scope;device_platform,
+EMAIL-014,vit_email,vit_email,True,complete,0.7065,False,,scope,
+EMAIL-015,vit_email,vit_email,True,partial,0.3065,False,error_signal;device_platform,scope;error_signal;device_platform,
+EMAIL-016,vit_email,vit_email,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+EMAIL-017,vit_email,vit_email,True,complete,0.7645,True,,device_platform,
+EMAIL-018,vit_email,vit_email,True,partial,0.5387,True,error_signal;device_platform,error_signal;device_platform,
+EMAIL-019,vit_email,vit_email,True,complete,0.521,False,,scope;device_platform,
+EMAIL-020,,vit_email,False,partial,0.2258,False,scope;device_platform,failure_type;scope;device_platform,
+EMAIL-021,vit_email,vit_email,True,complete,0.5226,False,,error_signal;device_platform,
+EMAIL-022,vit_email,vit_email,True,partial,0.4742,True,error_signal,scope;error_signal,
+EMAIL-023,ms_teams,vit_email,False,vague,0.2145,True,failure_type;scope;error_signal;device_platform,failure_type;scope;device_platform,
+EMAIL-024,vit_email,vit_email,True,complete,0.7258,False,,scope,
+EMAIL-025,vit_email,vit_email,True,partial,0.5226,True,error_signal;device_platform,error_signal;device_platform,
+EMAIL-026,vit_email,vit_email,True,vague,0.0,True,failure_type;scope;error_signal;device_platform,failure_type;scope;error_signal;device_platform,
+EMAIL-027,vit_email,vit_email,True,complete,0.7161,False,,scope,
+EMAIL-028,,vit_email,False,partial,0.5161,True,scope;device_platform,scope;device_platform,
+EMAIL-029,vit_email,vit_email,True,vague,0.5097,False,failure_type;scope;error_signal;device_platform,error_signal;device_platform,
+EMAIL-030,vit_email,vit_email,True,complete,0.4742,False,,scope;error_signal,
+ADA-001,ad_account_creation,ad_account_creation,True,vague,0.2794,True,username_domain;when_started;error_or_symptom;device_context;troubleshooting_done,username_domain;when_started;device_context;troubleshooting_done,
+ADA-002,ad_account_creation,ad_account_creation,True,partial,0.7824,False,error_or_symptom;troubleshooting_done,troubleshooting_done,
+ADA-003,,vit_email,False,complete,0.9387,True,,,
+ADA-004,ad_account_creation,ad_account_creation,True,vague,0.1588,True,username_domain;when_started;device_context;troubleshooting_done;scope,error_or_symptom;username_domain;device_context;troubleshooting_done,
+ADA-005,ad_account_creation,ad_account_creation,True,partial,0.4324,True,error_or_symptom;device_context;troubleshooting_done,username_domain;device_context;troubleshooting_done,
+ADA-006,ad_account_creation,ad_account_creation,True,complete,0.6574,False,,device_context;troubleshooting_done,
+ADA-007,ad_account_creation,ad_account_creation,True,vague,0.2941,True,when_started;device_context;troubleshooting_done;scope,username_domain;when_started;device_context;troubleshooting_done,
+ADA-008,ms_teams,ms_teams,True,partial,0.4742,True,when_started;troubleshooting_done,scope;error_signal,
+ADA-009,ad_account_creation,ad_account_creation,True,vague,0.4471,False,username_domain;error_or_symptom;device_context;troubleshooting_done;scope,username_domain;device_context;troubleshooting_done,
+ADA-010,ad_account_creation,ad_account_creation,True,complete,0.8529,True,,troubleshooting_done,
+ADA-011,ad_account_creation,ad_account_creation,True,partial,0.2794,False,username_domain;when_started;device_context;troubleshooting_done,username_domain;when_started;device_context;troubleshooting_done,
+ADA-012,ad_account_creation,ad_account_creation,True,vague,0.2794,True,when_started;error_or_symptom;device_context;troubleshooting_done,username_domain;when_started;device_context;troubleshooting_done,
+ADA-013,,vit_email,False,complete,0.9355,True,,,
+ADA-014,ad_account_creation,ad_account_creation,True,complete,0.9309,True,,,
+ADA-015,ad_account_creation,ad_account_creation,True,partial,0.4059,True,username_domain;device_context,username_domain;device_context;troubleshooting_done,
+ADA-016,ad_account_creation,ad_account_creation,True,vague,0.0,True,username_domain;when_started;error_or_symptom;device_context;scope,error_or_symptom;username_domain;when_started;device_context;troubleshooting_done,
+ADA-017,ad_account_creation,ad_account_creation,True,complete,0.5794,False,,username_domain;device_context,
+ADA-018,ad_account_creation,ad_account_creation,True,partial,0.4235,True,username_domain;error_or_symptom;device_context;troubleshooting_done,username_domain;device_context;troubleshooting_done,
+ADA-019,ad_account_creation,wifi_internet,False,vague,0.0,True,when_started;error_or_symptom;device_context;troubleshooting_done,symptom_type;single_or_multiple_devices;when_started;device_type;ssid,
+ADA-020,ad_account_creation,ad_account_creation,True,complete,0.9494,True,,,
+ADA-021,ms_teams,ms_teams,True,partial,0.521,True,when_started;troubleshooting_done,scope;device_platform,
+ADA-022,ad_account_creation,ad_account_creation,True,vague,0.0,True,username_domain;when_started;error_or_symptom;device_context;troubleshooting_done,error_or_symptom;username_domain;when_started;device_context;troubleshooting_done,
+ADA-023,ad_account_creation,vit_email,False,complete,0.4903,False,,scope;error_signal,
+ADA-024,ad_account_creation,ad_account_creation,True,vague,0.4382,False,username_domain;when_started;error_or_symptom;device_context;troubleshooting_done,username_domain;device_context;troubleshooting_done,
+ADA-025,ad_account_creation,ad_account_creation,True,partial,0.4118,True,username_domain;when_started,username_domain;when_started;device_context,
+ADA-026,ad_account_creation,ad_account_creation,True,complete,0.4382,False,,username_domain;device_context;troubleshooting_done,
+ADA-027,ad_account_creation,ad_account_creation,True,complete,0.7309,False,,username_domain,
+ADA-028,ad_account_creation,,False,vague,0.0,True,username_domain;when_started;error_or_symptom;device_context;troubleshooting_done,symptom_or_error;when_started;scope,
+ADA-029,,vit_email,False,complete,0.4806,False,,scope;error_signal,
+ADA-030,ad_account_creation,ad_account_creation,True,partial,0.2794,False,when_started;error_or_symptom;troubleshooting_done,username_domain;when_started;device_context;troubleshooting_done,
+PRN-001,printer_support,printer_support,True,vague,0.3292,True,printer_model;when_started;symptom;scope;connection_type;error_message;troubleshooting_done,error_message;connection_type;printer_model;when_started;troubleshooting_done,
+PRN-002,printer_support,printer_support,True,complete,1.0,True,,,
+PRN-003,printer_support,printer_support,True,complete,0.5458,False,,scope;error_message;connection_type,
+PRN-004,printer_support,printer_support,True,partial,0.3104,False,printer_model;scope;connection_type;troubleshooting_done,scope;error_message;connection_type;printer_model;troubleshooting_done,
+PRN-005,printer_support,printer_support,True,complete,0.5625,False,,symptom;connection_type;troubleshooting_done,
+PRN-006,printer_support,printer_support,True,partial,0.5625,True,printer_model;when_started,scope;error_message;printer_model,
+PRN-007,printer_support,printer_support,True,vague,0.3104,True,printer_model;scope;connection_type;error_message;troubleshooting_done,scope;error_message;connection_type;printer_model;troubleshooting_done,
+PRN-008,ad_account_creation,printer_support,False,complete,0.2458,False,,symptom;scope;connection_type;printer_model;troubleshooting_done,
+PRN-009,printer_support,printer_support,True,partial,0.4104,True,printer_model;when_started;connection_type,scope;error_message;connection_type;printer_model,
+PRN-010,printer_support,printer_support,True,vague,0.4792,False,printer_model;when_started;connection_type;error_message;troubleshooting_done,error_message;connection_type;printer_model;when_started,
+PRN-011,printer_support,printer_support,True,complete,0.7969,True,,error_message,
+PRN-012,printer_support,printer_support,True,complete,0.1125,False,,symptom;scope;error_message;connection_type;printer_model;troubleshooting_done,
+PRN-013,printer_support,printer_support,True,complete,0.4958,False,,symptom;connection_type;printer_model,
+PRN-014,printer_support,printer_support,True,partial,0.5302,True,printer_model;when_started;connection_type,scope;connection_type;printer_model,
+PRN-015,printer_support,printer_support,True,vague,0.1979,True,printer_model;when_started;symptom;scope;connection_type;error_message;troubleshooting_done,scope;error_message;connection_type;printer_model;when_started;troubleshooting_done,
+PRN-016,printer_support,printer_support,True,complete,0.8333,True,,scope,
+PRN-017,printer_support,printer_support,True,partial,0.4292,True,printer_model;scope;error_message,scope;error_message;printer_model;troubleshooting_done,
+PRN-018,printer_support,printer_support,True,partial,0.3,False,printer_model;connection_type;troubleshooting_done,scope;error_message;connection_type;printer_model;troubleshooting_done,
+PRN-019,printer_support,printer_support,True,complete,0.6292,False,,connection_type;printer_model;troubleshooting_done,
+PRN-020,printer_support,printer_support,True,vague,0.326,True,printer_model;when_started;scope;connection_type;troubleshooting_done,scope;connection_type;printer_model;when_started;troubleshooting_done,
+PRN-021,printer_support,printer_support,True,complete,0.8375,True,,connection_type,
+PRN-022,printer_support,printer_support,True,vague,0.3083,True,printer_model;when_started;scope;connection_type;troubleshooting_done,scope;error_message;connection_type;printer_model;troubleshooting_done,
+PRN-023,wifi_internet,wifi_internet,True,complete,0.6333,False,,device_type;ssid,
+PRN-024,printer_support,printer_support,True,partial,0.3104,False,printer_model;connection_type;error_message,scope;error_message;connection_type;printer_model;troubleshooting_done,
+PRN-025,printer_support,printer_support,True,vague,0.0,True,printer_model;when_started;symptom;scope;connection_type;error_message;troubleshooting_done,symptom;scope;error_message;connection_type;printer_model;when_started;troubleshooting_done,
+PRN-026,printer_support,printer_support,True,complete,0.7115,False,,connection_type;when_started,
+PRN-027,printer_support,printer_support,True,vague,0.1979,True,printer_model;when_started;scope;connection_type;troubleshooting_done,scope;error_message;connection_type;printer_model;when_started;troubleshooting_done,
+PRN-028,printer_support,printer_support,True,complete,0.8281,True,,connection_type,
+PRN-029,ad_account_creation,printer_support,False,complete,0.2583,False,,symptom;scope;connection_type;printer_model;troubleshooting_done,
+PRN-030,printer_support,printer_support,True,partial,0.4583,True,printer_model;when_started,scope;error_message;printer_model;troubleshooting_done,
+
+
+
+================================================
+FILE: scripts/run_agent1_eval.py
+================================================
+"""
+Real-API evaluation of Agent 1 (InformationExtractor + completeness scoring)
+against the team's synthetic ticket datasets.
+
+Costs real Gemini API calls - not part of the pytest suite. Run manually:
+    python scripts/run_agent1_eval.py
+
+LIMITATION (state this honestly in the paper too): the ground-truth
+`missing_fields` in these datasets were set by the data GENERATOR, not
+measured from independent human labeling of the message text. This
+script checks whether Agent 1's extraction roughly agrees with what the
+generator intended to omit - a proxy for extractor quality, not a
+certified gold-standard comparison.
+"""
+
+import asyncio
+import csv
+import json
+import sys
+from pathlib import Path
+
+# Ensure project root is importable regardless of where this is run from
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.agents.information_extractor import InformationExtractor
+from app.config.category_profiles import normalize_category_label
+from app.core.settings import settings
+from app.providers.exceptions import LLMProviderError
+from app.providers.gemini_provider import GeminiProvider
+from app.services.ticket_analysis_service import TicketAnalysisService
+import logging
+
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+logging.getLogger("google_genai.types").setLevel(logging.ERROR)
+
+
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "eval"
+RESULTS_PATH = Path(__file__).resolve().parent.parent / "results" / "agent1_eval_results.csv"
+
+DATASET_FILES = [
+    "wifi_internet.json",
+    "ms_teams.json",
+    "vit_email.json",
+    "ad_account_creation.json",
+    "printer_support.json",
+]
+
+# Rough score buckets for comparing against the dataset's qualitative
+# completeness_level label. These are judgment calls, not derived from
+# any labeled threshold-fitting exercise - stated as such in the paper.
+COMPLETENESS_BUCKETS = {
+    "vague": (0.0, 0.35),
+    "partial": (0.35, 0.75),
+    "complete": (0.75, 1.01),
+}
+
+# Gemini free-tier RPM protection. Adjust if you're on a paid tier.
+SECONDS_BETWEEN_CALLS = 4.5
+
+def load_all_tickets() -> list[dict]:
+    tickets = []
+    for filename in DATASET_FILES:
+        path = DATA_DIR / filename
+        if not path.exists():
+            print(f"WARNING: {path} not found, skipping.")
+            continue
+        with open(path, encoding="utf-8") as f:
+            tickets.extend(json.load(f))
+    return tickets
+
+
+def build_input_text(ticket: dict) -> str:
+    """
+    Mimics what a real submission would actually contain: subject + message
+    + OCR text if a screenshot was attached. Agent 1's real API only takes
+    one text field, so this is the realistic combined input, not just
+    the bare `message` in isolation.
+    """
+    parts = [f"Subject: {ticket['subject']}", ticket["message"]]
+    if ticket.get("ocr_text"):
+        parts.append(f"[Screenshot text: {ticket['ocr_text']}]")
+    return "\n".join(parts)
+
+
+def completeness_bucket_matches(predicted_score: float, expected_level: str) -> bool:
+    low, high = COMPLETENESS_BUCKETS.get(expected_level, (0.0, 1.01))
+    return low <= predicted_score < high
+
+
+async def evaluate_ticket(service: TicketAnalysisService, ticket: dict, max_retries: int = 2) -> dict:
+    input_text = build_input_text(ticket)
+    expected_category = normalize_category_label(ticket["true_category"])
+
+    error = None
+    result = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = await service.analyze(input_text)
+            error = None
+            break
+        except LLMProviderError as exc:
+            error = str(exc)
+            if "429" in error and attempt < max_retries:
+                wait = 10 * (attempt + 1)  # backoff: 10s, then 20s
+                print(f"    -> 429 hit, retrying in {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            break
+
+    if result is not None:
+        predicted_category = result.category.value
+        completeness_score = result.completeness_score
+        missing_fields_predicted = result.missing_or_uncertain_fields
+    else:
+        predicted_category = None
+        completeness_score = None
+        missing_fields_predicted = []
+
+    category_correct = predicted_category == expected_category if error is None else None
+    bucket_match = (
+        completeness_bucket_matches(completeness_score, ticket["completeness_level"])
+        if error is None
+        else None
+    )
+
+    return {
+        "ticket_id": ticket["ticket_id"],
+        "expected_category": expected_category,
+        "predicted_category": predicted_category,
+        "category_correct": category_correct,
+        "completeness_level_expected": ticket["completeness_level"],
+        "completeness_score_predicted": completeness_score,
+        "completeness_bucket_match": bucket_match,
+        "missing_fields_expected": ";".join(ticket.get("missing_fields", [])),
+        "missing_fields_predicted": ";".join(missing_fields_predicted),
+        "error": error,
+    }
+
+
+async def main():
+    tickets = load_all_tickets()
+    if not tickets:
+        print("No tickets loaded - check data/eval/ files exist.")
+        return
+
+    print(f"Loaded {len(tickets)} tickets. Starting evaluation against real Gemini API...")
+    print(f"Rate-limited to 1 call per {SECONDS_BETWEEN_CALLS}s.\n")
+
+    provider = GeminiProvider(api_key=settings.gemini_api_key or "", model=settings.gemini_model)
+    extractor = InformationExtractor(provider)
+    service = TicketAnalysisService(extractor)
+
+    results = []
+    for i, ticket in enumerate(tickets, start=1):
+        row = await evaluate_ticket(service, ticket)
+        results.append(row)
+
+        status = "ERROR" if row["error"] else ("OK" if row["category_correct"] else "MISS")
+        print(f"[{i}/{len(tickets)}] {row['ticket_id']} - {status}")
+
+        if i < len(tickets):
+            await asyncio.sleep(SECONDS_BETWEEN_CALLS)
+
+    RESULTS_PATH.parent.mkdir(exist_ok=True)
+    with open(RESULTS_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=results[0].keys())
+        writer.writeheader()
+        writer.writerows(results)
+
+    print(f"\nFull results saved to {RESULTS_PATH}\n")
+    print_summary(results)
+
+
+def print_summary(results: list[dict]):
+    completed = [r for r in results if r["error"] is None]
+    errored = [r for r in results if r["error"] is not None]
+
+    print("=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    print(f"Total tickets: {len(results)}")
+    print(f"Successful API calls: {len(completed)}")
+    print(f"Failed API calls: {len(errored)}")
+
+    if completed:
+        correct = sum(1 for r in completed if r["category_correct"])
+        print(f"\nOverall category accuracy: {correct}/{len(completed)} ({correct/len(completed):.1%})")
+
+        by_category: dict[str, list[dict]] = {}
+        for r in completed:
+            by_category.setdefault(r["expected_category"], []).append(r)
+
+        print("\nPer-category accuracy:")
+        for cat, rows in sorted(by_category.items(), key=lambda x: x[0] or "UNKNOWN"):
+            cat_correct = sum(1 for r in rows if r["category_correct"])
+            print(f"  {cat}: {cat_correct}/{len(rows)} ({cat_correct/len(rows):.1%})")
+
+        bucket_matches = sum(1 for r in completed if r["completeness_bucket_match"])
+        print(
+            f"\nCompleteness bucket agreement: {bucket_matches}/{len(completed)} "
+            f"({bucket_matches/len(completed):.1%})"
+        )
+
+        misses = [r for r in completed if not r["category_correct"]]
+        if misses:
+            print(f"\nMisclassified tickets ({len(misses)}):")
+            for r in misses[:15]:
+                print(f"  {r['ticket_id']}: expected={r['expected_category']}, got={r['predicted_category']}")
+            if len(misses) > 15:
+                print(f"  ... and {len(misses) - 15} more (see CSV)")
+
+    if errored:
+        print(f"\nErrored tickets ({len(errored)}):")
+        for r in errored[:5]:
+            print(f"  {r['ticket_id']}: {r['error']}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+================================================
+FILE: tests/README.md
+================================================
+# TRO â€” Ticket Readiness Orchestration
+
+A confidence-gated multi-agent architecture for pre-submission clarification, deflection, and correlation in ITSM.
+
+## Setup
+
+1. Create and activate a virtual environment (Python 3.11):
+   \`\`\`
+   py -3.11 -m venv venv
+   venv\Scripts\activate
+   \`\`\`
+2. Install dependencies:
+   \`\`\`
+   pip install -r requirements.txt
+   \`\`\`
+3. Copy \`.env.example\` to \`.env\` and fill in your API key.
+4. Run the app:
+   \`\`\`
+   uvicorn app.main:app --reload
+   \`\`\`
+5. Run tests:
+   \`\`\`
+   pytest
+   \`\`\`
+
+## Status
+
+Milestone 1: Project initialization + health check endpoint. Agent 1 (information extraction) in progress.
+
+
+================================================
+FILE: tests/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: tests/test_api.py
+================================================
+import pytest
+from fastapi.testclient import TestClient
+
+from app.agents.information_extractor import InformationExtractor
+from app.dependencies import get_ticket_analysis_service
+from app.main import app
+from app.providers.base import LLMProvider
+from app.providers.exceptions import LLMProviderError
+from app.schemas.extraction import CategoryPrediction, ExtractedField, ExtractionResult
+from app.services.ticket_analysis_service import TicketAnalysisService
+
+client = TestClient(app)
+
+_DEFAULT_CANNED = ExtractionResult(
+    category=CategoryPrediction(value=None, confidence=0.0),
+    extracted_fields={},
+)
+
+
+class StubProvider(LLMProvider):
+    def __init__(self, canned_result: ExtractionResult | None = None, raise_error: bool = False):
+        self._canned_result = canned_result
+        self._raise_error = raise_error
+
+    async def extract_information(self, issue_text: str) -> ExtractionResult:
+        if self._raise_error:
+            raise LLMProviderError("mock provider failure")
+        return self._canned_result
+
+
+def override_with(canned: ExtractionResult | None = None, raise_error: bool = False):
+    def _override():
+        provider = StubProvider(canned_result=canned or _DEFAULT_CANNED, raise_error=raise_error)
+        extractor = InformationExtractor(provider)
+        return TicketAnalysisService(extractor)
+
+    return _override
+
+
+@pytest.fixture(autouse=True)
+def stub_service_by_default():
+    """
+    Ensures every test in this file â€” even ones that never explicitly
+    override the dependency â€” hits a stub, not the real GeminiProvider.
+    Without this, requests that should fail at body-validation (422)
+    instead crash earlier during dependency construction, since FastAPI
+    resolves Depends() and the request body together, not body-first.
+    """
+    app.dependency_overrides[get_ticket_analysis_service] = override_with()
+    yield
+    app.dependency_overrides.clear()
+
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+
+
+def test_analyze_returns_valid_result():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="wifi_internet", confidence=0.9),
+        extracted_fields={"symptom_type": ExtractedField(value="drops", confidence=0.9)},
+    )
+    app.dependency_overrides[get_ticket_analysis_service] = override_with(canned=canned)
+    response = client.post("/analyze", json={"message": "My wifi keeps dropping."})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["category"]["value"] == "wifi_internet"
+    assert "completeness_score" in body
+    assert "missing_or_uncertain_fields" in body
+
+
+def test_analyze_rejects_empty_message():
+    response = client.post("/analyze", json={"message": ""})
+    assert response.status_code == 422
+
+
+def test_analyze_missing_message_field_returns_422():
+    response = client.post("/analyze", json={})
+    assert response.status_code == 422
+
+
+def test_analyze_provider_failure_returns_503():
+    app.dependency_overrides[get_ticket_analysis_service] = override_with(raise_error=True)
+    response = client.post("/analyze", json={"message": "Something broke."})
+    assert response.status_code == 503
+    assert "mock provider failure" in response.json()["detail"]
+
+
+def test_analyze_hallucinated_category_sanitized_through_full_stack():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="not_a_real_category", confidence=0.7),
+        extracted_fields={},
+    )
+    app.dependency_overrides[get_ticket_analysis_service] = override_with(canned=canned)
+    response = client.post("/analyze", json={"message": "Something vague."})
+    assert response.status_code == 200
+    assert response.json()["category"]["value"] is None
+
+
+def test_analyze_printer_example_returns_expected_shape():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="printer_support", confidence=0.9),
+        extracted_fields={
+            "symptom": ExtractedField(value="offline", confidence=0.9),
+            "connection_type": ExtractedField(value="network", confidence=0.85),
+        },
+    )
+    app.dependency_overrides[get_ticket_analysis_service] = override_with(canned=canned)
+    response = client.post(
+        "/analyze", json={"message": "Printer showing offline, connected over network."}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["category"]["value"] == "printer_support"
+    assert "printer_model" in body["missing_or_uncertain_fields"]
+
+
+================================================
+FILE: tests/test_category_profiles.py
+================================================
+from app.config.category_profiles import (
+    CATEGORY_FIELD_PROFILES,
+    VALID_CATEGORIES,
+    get_profile,
+    normalize_category_label,
+)
+
+
+def test_all_expected_categories_present():
+    expected = {
+        "wifi_internet",
+        "ms_teams",
+        "vit_email",
+        "ad_account_creation",
+        "printer_support",
+        "general",
+    }
+    assert expected.issubset(set(VALID_CATEGORIES))
+
+
+def test_all_weights_in_valid_range():
+    for category, fields in CATEGORY_FIELD_PROFILES.items():
+        for field_name, weight in fields.items():
+            assert 0.0 < weight <= 1.0, f"{category}.{field_name} weight out of range"
+
+
+def test_each_category_has_at_least_one_field():
+    for category, fields in CATEGORY_FIELD_PROFILES.items():
+        assert len(fields) > 0, f"{category} has no fields defined"
+
+
+def test_teams_and_email_share_identical_vocabulary_by_design():
+    # Not a bug - both categories fail in the same shape (SSO/app-layer
+    # issues). This test documents that the overlap is intentional,
+    # so a future "fix" doesn't accidentally diverge them without reason.
+    assert set(CATEGORY_FIELD_PROFILES["ms_teams"].keys()) == set(
+        CATEGORY_FIELD_PROFILES["vit_email"].keys()
+    )
+
+
+def test_get_profile_returns_correct_profile():
+    profile = get_profile("printer_support")
+    assert profile == CATEGORY_FIELD_PROFILES["printer_support"]
+
+
+def test_get_profile_falls_back_on_none():
+    assert get_profile(None) == CATEGORY_FIELD_PROFILES["general"]
+
+
+def test_get_profile_falls_back_on_unknown_category():
+    assert get_profile("some_made_up_category") == CATEGORY_FIELD_PROFILES["general"]
+
+
+def test_ad_account_creation_has_expected_fields():
+    profile = get_profile("ad_account_creation")
+    assert "error_or_symptom" in profile
+    assert "username_domain" in profile
+
+
+def test_ms_teams_has_expected_fields():
+    profile = get_profile("ms_teams")
+    assert "failure_type" in profile
+    assert "error_signal" in profile
+
+
+def test_normalize_category_label_maps_known_display_names():
+    assert normalize_category_label("Wifi/Internet Support") == "wifi_internet"
+    assert normalize_category_label("AD Account Creation") == "ad_account_creation"
+    assert normalize_category_label("Microsoft Teams Support") == "ms_teams"
+    assert normalize_category_label("VIT Email Support") == "vit_email"
+    assert normalize_category_label("Printer Support") == "printer_support"
+
+
+def test_normalize_category_label_returns_none_for_unrecognized():
+    assert normalize_category_label("Some Random Category") is None
+
+
+def test_normalize_category_label_handles_none():
+    assert normalize_category_label(None) is None
+
+
+================================================
+FILE: tests/test_completeness_scorer.py
+================================================
+from app.agents.completeness_scorer import score_completeness
+from app.schemas.extraction import ExtractedField
+
+
+def test_all_fields_present_high_confidence_scores_near_one():
+    fields = {
+        "symptom_type": ExtractedField(value="drops intermittently", confidence=0.95),
+        "single_or_multiple_devices": ExtractedField(value="multiple", confidence=0.9),
+        "when_started": ExtractedField(value="since last night", confidence=0.85),
+        "device_type": ExtractedField(value="laptop", confidence=0.9),
+        "ssid": ExtractedField(value="VIT-WiFi", confidence=0.9),
+    }
+    result = score_completeness("wifi_internet", fields)
+    assert result.score > 0.85
+    assert result.missing_or_uncertain_fields == []
+
+
+def test_almost_no_information_scores_near_zero():
+    fields = {"symptom_type": ExtractedField(value=None, confidence=0.0)}
+    result = score_completeness("wifi_internet", fields)
+    assert result.score < 0.2
+    assert len(result.missing_or_uncertain_fields) == 5  # all wifi_internet fields
+
+
+def test_field_absent_entirely_counts_as_missing():
+    fields = {"symptom_type": ExtractedField(value="won't connect", confidence=0.9)}
+    result = score_completeness("wifi_internet", fields)
+    assert "ssid" in result.missing_or_uncertain_fields
+
+
+def test_low_confidence_field_counts_as_uncertain_even_with_value():
+    fields = {"symptom_type": ExtractedField(value="maybe drops?", confidence=0.2)}
+    result = score_completeness("wifi_internet", fields)
+    assert "symptom_type" in result.missing_or_uncertain_fields
+
+
+def test_high_confidence_field_not_flagged():
+    fields = {"symptom_type": ExtractedField(value="won't connect", confidence=0.6)}
+    result = score_completeness("wifi_internet", fields)
+    assert "symptom_type" not in result.missing_or_uncertain_fields
+
+
+def test_unknown_category_falls_back_to_general_profile():
+    fields = {"symptom_or_error": ExtractedField(value="something", confidence=0.9)}
+    result = score_completeness("not_a_real_category", fields)
+    general_fields = {"symptom_or_error", "when_started", "scope"}
+    assert set(result.missing_or_uncertain_fields).issubset(general_fields)
+
+
+def test_none_category_falls_back_to_general_profile():
+    result = score_completeness(None, {})
+    assert result.score == 0.0
+    assert "symptom_or_error" in result.missing_or_uncertain_fields
+
+
+def test_ad_account_creation_full_example():
+    fields = {
+        "error_or_symptom": ExtractedField(value="locked out", confidence=0.95),
+        "username_domain": ExtractedField(value="EMP2291", confidence=0.9),
+        "when_started": ExtractedField(value="this morning", confidence=0.85),
+        "device_context": ExtractedField(value=None, confidence=0.0),
+        "troubleshooting_done": ExtractedField(value=None, confidence=0.0),
+    }
+    result = score_completeness("ad_account_creation", fields)
+    assert 0.5 < result.score < 0.9
+    assert "device_context" in result.missing_or_uncertain_fields
+    assert "troubleshooting_done" in result.missing_or_uncertain_fields
+    assert "error_or_symptom" not in result.missing_or_uncertain_fields
+
+
+def test_printer_support_partial_example():
+    fields = {
+        "symptom": ExtractedField(value="offline", confidence=0.9),
+        "error_message": ExtractedField(value="Printer Status: Offline", confidence=0.88),
+    }
+    result = score_completeness("printer_support", fields)
+    assert "scope" in result.missing_or_uncertain_fields
+    assert "symptom" not in result.missing_or_uncertain_fields
+
+
+def test_score_is_bounded_between_zero_and_one():
+    fields = {
+        "failure_type": ExtractedField(value="can't hear audio", confidence=1.0),
+        "scope": ExtractedField(value="every meeting", confidence=1.0),
+        "error_signal": ExtractedField(value=None, confidence=0.0),
+        "device_platform": ExtractedField(value="desktop app", confidence=1.0),
+    }
+    result = score_completeness("ms_teams", fields)
+    assert 0.0 <= result.score <= 1.0
+
+
+def test_teams_and_email_score_identically_for_same_field_pattern():
+    # Confirms the intentional shared vocabulary actually behaves
+    # identically in the scorer, not just in the config.
+    fields = {
+        "failure_type": ExtractedField(value="won't send", confidence=0.9),
+        "scope": ExtractedField(value="all outgoing mail", confidence=0.85),
+    }
+    teams_result = score_completeness("ms_teams", fields)
+    email_result = score_completeness("vit_email", fields)
+    assert teams_result.score == email_result.score
+
+
+================================================
+FILE: tests/test_gemini_provider.py
+================================================
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from app.providers.exceptions import LLMProviderError
+from app.providers.gemini_provider import GeminiProvider, WireExtractedField, WireExtractionResponse
+from app.schemas.extraction import CategoryPrediction
+
+
+def make_provider() -> GeminiProvider:
+    with patch("app.providers.gemini_provider.genai.Client"):
+        return GeminiProvider(api_key="fake-key", model="gemini-3.5-flash-lite")
+
+
+def test_missing_api_key_raises_immediately():
+    with pytest.raises(LLMProviderError):
+        GeminiProvider(api_key="", model="gemini-2.5-flash-lite")
+
+
+@pytest.mark.asyncio
+async def test_successful_extraction_converts_wire_format_to_extraction_result():
+    wire = WireExtractionResponse(
+        category=CategoryPrediction(value="wifi_internet", confidence=0.9),
+        fields=[WireExtractedField(field_name="symptom_type", value="drops", confidence=0.95)],
+    )
+    mock_response = MagicMock()
+    mock_response.parsed = wire
+
+    provider = make_provider()
+    provider._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    result = await provider.extract_information("My wifi keeps dropping.")
+    assert result.category.value == "wifi_internet"
+    assert result.extracted_fields["symptom_type"].value == "drops"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_manual_json_parse_when_unparsed():
+    raw_json = (
+        '{"category": {"value": "printer_support", "confidence": 0.85}, '
+        '"fields": [{"field_name": "symptom", "value": "paper jam", "confidence": 0.9}]}'
+    )
+    mock_response = MagicMock()
+    mock_response.parsed = None
+    mock_response.text = raw_json
+
+    provider = make_provider()
+    provider._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    result = await provider.extract_information("Printer keeps jamming.")
+    assert result.category.value == "printer_support"
+    assert result.extracted_fields["symptom"].value == "paper jam"
+
+
+@pytest.mark.asyncio
+async def test_sdk_exception_raises_llm_provider_error():
+    provider = make_provider()
+    provider._client.aio.models.generate_content = AsyncMock(side_effect=RuntimeError("network down"))
+
+    with pytest.raises(LLMProviderError):
+        await provider.extract_information("Something broke.")
+
+
+@pytest.mark.asyncio
+async def test_malformed_json_raises_llm_provider_error():
+    mock_response = MagicMock()
+    mock_response.parsed = None
+    mock_response.text = "not valid json at all"
+
+    provider = make_provider()
+    provider._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    with pytest.raises(LLMProviderError):
+        await provider.extract_information("Something vague.")
+
+
+@pytest.mark.asyncio
+async def test_internally_inconsistent_field_raises_llm_provider_error():
+    # Simulates Gemini ignoring the "omit rather than null" instruction and
+    # returning a null value with nonzero confidence - should surface as a
+    # clear provider error, not an unhandled crash.
+    wire = WireExtractionResponse(
+        category=CategoryPrediction(value="wifi_internet", confidence=0.9),
+        fields=[WireExtractedField(field_name="symptom_type", value=None, confidence=0.4)],
+    )
+    mock_response = MagicMock()
+    mock_response.parsed = wire
+
+    provider = make_provider()
+    provider._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    with pytest.raises(LLMProviderError):
+        await provider.extract_information("Something vague.")
+
+
+================================================
+FILE: tests/test_information_extractor.py
+================================================
+import pytest
+
+from app.agents.information_extractor import InformationExtractor
+from app.providers.base import LLMProvider
+from app.schemas.extraction import CategoryPrediction, ExtractedField, ExtractionResult
+
+
+class StubProvider(LLMProvider):
+    def __init__(self, canned_result: ExtractionResult):
+        self._canned_result = canned_result
+
+    async def extract_information(self, issue_text: str) -> ExtractionResult:
+        return self._canned_result
+
+
+@pytest.mark.asyncio
+async def test_valid_category_passes_through_unchanged():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="wifi_internet", confidence=0.92),
+        extracted_fields={"symptom_type": ExtractedField(value="drops", confidence=0.9)},
+    )
+    extractor = InformationExtractor(StubProvider(canned))
+    result = await extractor.extract("My wifi keeps dropping in the library.")
+    assert result.category.value == "wifi_internet"
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_category_is_sanitized_to_none():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="totally_made_up_category", confidence=0.8),
+        extracted_fields={},
+    )
+    extractor = InformationExtractor(StubProvider(canned))
+    result = await extractor.extract("Something ambiguous happened.")
+    assert result.category.value is None
+    assert result.category.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_general_is_rejected_as_llm_output_since_its_internal_only():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="general", confidence=0.5),
+        extracted_fields={},
+    )
+    extractor = InformationExtractor(StubProvider(canned))
+    result = await extractor.extract("My thing is broken.")
+    assert result.category.value is None
+
+
+@pytest.mark.asyncio
+async def test_none_category_passes_through_unchanged():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value=None, confidence=0.0),
+        extracted_fields={},
+    )
+    extractor = InformationExtractor(StubProvider(canned))
+    result = await extractor.extract("asdkjf")
+    assert result.category.value is None
+
+
+@pytest.mark.asyncio
+async def test_extracted_fields_pass_through_untouched():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="ms_teams", confidence=0.9),
+        extracted_fields={
+            "failure_type": ExtractedField(value="can't hear audio", confidence=0.88),
+            "error_signal": ExtractedField(value=None, confidence=0.0),
+        },
+    )
+    extractor = InformationExtractor(StubProvider(canned))
+    result = await extractor.extract("Teams audio doesn't work for me.")
+    assert result.extracted_fields["failure_type"].value == "can't hear audio"
+    assert result.extracted_fields["error_signal"].value is None
+
+
+@pytest.mark.asyncio
+async def test_realistic_ad_account_message_end_to_end_with_stub():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="ad_account_creation", confidence=0.9),
+        extracted_fields={
+            "error_or_symptom": ExtractedField(value="account locked", confidence=0.95),
+            "when_started": ExtractedField(value=None, confidence=0.0),
+        },
+    )
+    extractor = InformationExtractor(StubProvider(canned))
+    result = await extractor.extract("my account is locked not able to login")
+    assert result.category.value == "ad_account_creation"
+    assert result.extracted_fields["when_started"].value is None
+
+
+================================================
+FILE: tests/test_schemas.py
+================================================
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.extraction import CategoryPrediction, ExtractedField, ExtractionResult
+from app.schemas.analysis import AnalysisResult
+from app.schemas.conversation import ConversationState, Message, UserMessageRequest
+
+
+def test_extracted_field_valid():
+    field = ExtractedField(value="VPN", confidence=0.98)
+    assert field.value == "VPN"
+    assert field.confidence == 0.98
+
+
+def test_extracted_field_null_value_allowed():
+    field = ExtractedField(value=None, confidence=0.0)
+    assert field.value is None
+    assert field.confidence == 0.0
+
+
+def test_extracted_field_confidence_out_of_range_rejected():
+    with pytest.raises(ValidationError):
+        ExtractedField(value="x", confidence=1.5)
+    with pytest.raises(ValidationError):
+        ExtractedField(value="x", confidence=-0.1)
+
+
+def test_category_prediction_valid():
+    cat = CategoryPrediction(value="network_vpn", confidence=0.96)
+    assert cat.value == "network_vpn"
+
+
+def test_extraction_result_vpn_example():
+    result = ExtractionResult(
+        category=CategoryPrediction(value="network_vpn", confidence=0.95),
+        extracted_fields={
+            "affected_system": ExtractedField(value="VPN", confidence=0.98),
+            "trigger": ExtractedField(value="after laptop wakes from sleep", confidence=0.91),
+            "frequency": ExtractedField(value=None, confidence=0.0),
+        },
+    )
+    assert result.category.value == "network_vpn"
+    assert result.extracted_fields["frequency"].value is None
+    assert len(result.extracted_fields) == 3
+
+
+def test_analysis_result_full_example():
+    result = AnalysisResult(
+        category=CategoryPrediction(value="network_vpn", confidence=0.96),
+        extracted_fields={
+            "affected_system": ExtractedField(value="VPN", confidence=0.99),
+            "trigger": ExtractedField(value="laptop wakes from sleep", confidence=0.95),
+            "frequency": ExtractedField(value="every time", confidence=0.98),
+            "error_message": ExtractedField(value=None, confidence=0.0),
+        },
+        completeness_score=0.74,
+        missing_or_uncertain_fields=["error_message", "network_context"],
+    )
+    assert result.completeness_score == 0.74
+    assert "error_message" in result.missing_or_uncertain_fields
+
+
+def test_user_message_request_valid():
+    req = UserMessageRequest(message="My VPN disconnects every time my laptop wakes from sleep.")
+    assert req.message.startswith("My VPN")
+
+
+def test_user_message_request_rejects_empty():
+    with pytest.raises(ValidationError):
+        UserMessageRequest(message="")
+
+
+def test_conversation_state_defaults():
+    state = ConversationState(conversation_id="conv-001")
+    assert state.turn_count == 0
+    assert state.raw_messages == []
+    assert state.detected_category is None
+    assert state.completeness_score == 0.0
+    assert state.clarification_log == []
+
+
+def test_conversation_state_populated_by_agent1():
+    state = ConversationState(
+        conversation_id="conv-002",
+        raw_messages=[Message(role="user", content="Outlook crashes when I open an attachment.")],
+        extracted_fields={
+            "application": ExtractedField(value="Outlook", confidence=0.99),
+            "trigger": ExtractedField(value="opening an attachment", confidence=0.95),
+        },
+        detected_category=CategoryPrediction(value="software", confidence=0.95),
+        completeness_score=0.68,
+        missing_or_uncertain_fields=["error_message"],
+    )
+    assert state.detected_category.value == "software"
+    assert state.extracted_fields["application"].value == "Outlook"
+
+def test_extracted_field_rejects_value_with_zero_confidence_mismatch():
+    with pytest.raises(ValidationError):
+        ExtractedField(value=None, confidence=0.5)
+
+
+def test_extracted_field_allows_value_with_low_confidence():
+    field = ExtractedField(value="maybe VPN", confidence=0.2)
+    assert field.confidence == 0.2
+
+
+def test_category_prediction_allows_none_when_undetermined():
+    cat = CategoryPrediction(value=None, confidence=0.0)
+    assert cat.value is None
+
+
+def test_category_prediction_rejects_none_with_nonzero_confidence():
+    with pytest.raises(ValidationError):
+        CategoryPrediction(value=None, confidence=0.3)
+
+
+================================================
+FILE: tests/test_ticket_analysis_service.py
+================================================
+import pytest
+
+from app.agents.information_extractor import InformationExtractor
+from app.providers.base import LLMProvider
+from app.schemas.extraction import CategoryPrediction, ExtractedField, ExtractionResult
+from app.services.ticket_analysis_service import TicketAnalysisService
+
+
+class StubProvider(LLMProvider):
+    def __init__(self, canned_result: ExtractionResult):
+        self._canned_result = canned_result
+
+    async def extract_information(self, issue_text: str) -> ExtractionResult:
+        return self._canned_result
+
+
+def make_service(canned: ExtractionResult) -> TicketAnalysisService:
+    extractor = InformationExtractor(StubProvider(canned))
+    return TicketAnalysisService(extractor)
+
+
+@pytest.mark.asyncio
+async def test_wifi_example_end_to_end():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="wifi_internet", confidence=0.95),
+        extracted_fields={
+            "symptom_type": ExtractedField(value="drops intermittently", confidence=0.9),
+            "single_or_multiple_devices": ExtractedField(value="multiple", confidence=0.88),
+            "when_started": ExtractedField(value="since last night", confidence=0.85),
+            "ssid": ExtractedField(value=None, confidence=0.0),
+        },
+    )
+    service = make_service(canned)
+    result = await service.analyze(
+        "None of my devices are getting internet since last night â€” laptop and phone both."
+    )
+    assert result.category.value == "wifi_internet"
+    assert 0.0 < result.completeness_score < 1.0
+    assert "ssid" in result.missing_or_uncertain_fields
+    assert "device_type" in result.missing_or_uncertain_fields  # never mentioned at all
+
+
+@pytest.mark.asyncio
+async def test_vague_message_scores_low_completeness():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value=None, confidence=0.0),
+        extracted_fields={},
+    )
+    service = make_service(canned)
+    result = await service.analyze("wifi not working pls help")
+    assert result.category.value is None
+    assert result.completeness_score == 0.0
+    assert len(result.missing_or_uncertain_fields) > 0
+
+
+@pytest.mark.asyncio
+async def test_ad_account_creation_mostly_complete():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="ad_account_creation", confidence=0.9),
+        extracted_fields={
+            "error_or_symptom": ExtractedField(value="account locked", confidence=0.95),
+            "username_domain": ExtractedField(value="EMP2291", confidence=0.9),
+            "when_started": ExtractedField(value="this morning", confidence=0.85),
+        },
+    )
+    service = make_service(canned)
+    result = await service.analyze(
+        "My AD account got locked this morning, username EMP2291, can't log in."
+    )
+    assert result.category.value == "ad_account_creation"
+    assert result.completeness_score > 0.5
+    assert "device_context" in result.missing_or_uncertain_fields
+    assert "troubleshooting_done" in result.missing_or_uncertain_fields
+    assert "error_or_symptom" not in result.missing_or_uncertain_fields
+
+
+@pytest.mark.asyncio
+async def test_hallucinated_category_is_sanitized_before_scoring():
+    # If the extractor's sanitization step failed, this would score against
+    # a made-up category with no profile - this test proves the whole
+    # pipeline (not just InformationExtractor in isolation) is protected.
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="not_a_real_category", confidence=0.7),
+        extracted_fields={"symptom_type": ExtractedField(value="something", confidence=0.8)},
+    )
+    service = make_service(canned)
+    result = await service.analyze("Something vague happened with my system.")
+    assert result.category.value is None
+    # falls back to 'general' profile fields internally
+    general_fields = {"symptom_or_error", "when_started", "scope"}
+    assert set(result.missing_or_uncertain_fields).issubset(general_fields)
+
+
+@pytest.mark.asyncio
+async def test_printer_support_example():
+    canned = ExtractionResult(
+        category=CategoryPrediction(value="printer_support", confidence=0.93),
+        extracted_fields={
+            "symptom": ExtractedField(value="showing offline", confidence=0.9),
+            "printer_model": ExtractedField(value="HP LaserJet P1108", confidence=0.88),
+            "connection_type": ExtractedField(value="network", confidence=0.85),
+            "when_started": ExtractedField(value="this morning around 9am", confidence=0.85),
+        },
+    )
+    service = make_service(canned)
+    result = await service.analyze(
+        "The HP LaserJet P1108 has been showing offline since this morning, connected over network."
+    )
+    # weighted_sum = (1.0*0.9)+(0.6*0.88)+(0.6*0.85)+(0.6*0.85) = 0.9+0.528+0.51+0.51 = 2.448
+    # total_weight (printer_support) = 1.0+0.8+0.7+0.6+0.6+0.6+0.5 = 4.8
+    # score = 2.448 / 4.8 = 0.51
+    assert 0.45 < result.completeness_score < 0.55
+    assert "scope" in result.missing_or_uncertain_fields
+    assert "error_message" in result.missing_or_uncertain_fields
+    assert "troubleshooting_done" in result.missing_or_uncertain_fields
+    assert "symptom" not in result.missing_or_uncertain_fields
+
+
+@pytest.mark.asyncio
+async def test_ms_teams_and_vit_email_score_consistently_for_same_pattern():
+    # Confirms end-to-end (not just the scorer in isolation) that the
+    # intentionally shared vocabulary between these two categories
+    # produces consistent behavior through the full service.
+    fields = {
+        "failure_type": ExtractedField(value="can't send", confidence=0.9),
+        "scope": ExtractedField(value="all outgoing", confidence=0.85),
+    }
+    teams_canned = ExtractionResult(
+        category=CategoryPrediction(value="ms_teams", confidence=0.9), extracted_fields=fields
+    )
+    email_canned = ExtractionResult(
+        category=CategoryPrediction(value="vit_email", confidence=0.9), extracted_fields=fields
+    )
+    teams_result = await make_service(teams_canned).analyze("Teams message.")
+    email_result = await make_service(email_canned).analyze("Email message.")
+    assert teams_result.completeness_score == email_result.completeness_score
+
