@@ -14,9 +14,9 @@ silently ignored (a known occasional Groq issue) and the model returns
 free-form text instead, we attempt a manual json.loads + Pydantic
 validate before giving up.
 
-The prompt and state-serialization below are placeholders (M5.3 scope
-is proving the wire works end-to-end) - both get replaced by the real
-system prompt and a dedicated serializer in M5.4.
+Prompt and state serialization live in adaptive_clarifier_prompts.py and
+clarification_context.py respectively (M5.4) - this file only owns the
+API call, schema enforcement, and response parsing.
 """
 
 import json
@@ -25,31 +25,13 @@ from typing import Any
 from groq import AsyncGroq
 from pydantic import BaseModel, ValidationError
 
+from app.agents.adaptive_clarifier_prompts import SYSTEM_PROMPT
+from app.agents.clarification_context import build_agent2_context
+from app.config.settings import settings
 from app.providers.clarification_base import ClarificationProvider
 from app.providers.exceptions import LLMProviderError
 from app.schemas.clarification import ClarificationDecision
 from app.schemas.conversation import ConversationState
-
-# PLACEHOLDER - replaced by the real prompt in M5.4.
-_PLACEHOLDER_SYSTEM_PROMPT = """You are Agent 2, an adaptive clarification
-agent for VIT's IT service desk. Given the conversation state below,
-decide the next best action: ASK_CLARIFICATION, READY, RECHECK, or ESCALATE.
-Do not ask for information already present. Prefer one high-value question
-over several low-value ones. Never invent facts not present in the text.
-Respond with a single JSON object matching the required schema exactly."""
-
-
-def _placeholder_serialize_state(state: ConversationState) -> str:
-    """PLACEHOLDER - replaced by a proper serializer in M5.4."""
-    messages = "\n".join(f"{m.role}: {m.content}" for m in state.raw_messages)
-    category = state.detected_category.value if state.detected_category else None
-    return (
-        f"Conversation so far:\n{messages}\n\n"
-        f"Detected category: {category}\n"
-        f"Completeness score: {state.completeness_score}\n"
-        f"Missing or uncertain fields: {state.missing_or_uncertain_fields}\n"
-        f"Turn count: {state.turn_count}"
-    )
 
 
 def _to_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -61,11 +43,6 @@ def _to_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
     schema = model.model_json_schema()
     schema["required"] = list(schema.get("properties", {}).keys())
     schema["additionalProperties"] = False
-    for prop in schema.get("properties", {}).values():
-        # Optional[str]-style fields compile to anyOf: [{"type":"string"},{"type":"null"}]
-        # already valid for strict mode as-is - no change needed there.
-        if "$ref" in prop or "$defs" in schema:
-            pass  # nested $defs (e.g. enums) don't need additionalProperties patching here
     return schema
 
 
@@ -81,12 +58,16 @@ class GroqClarificationProvider(ClarificationProvider):
         self._schema = _to_strict_schema(ClarificationDecision)
 
     async def decide_clarification(self, state: ConversationState) -> ClarificationDecision:
+        user_context = build_agent2_context(
+            state, max_turns=settings.max_clarification_turns
+        )
+
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=[
-                    {"role": "system", "content": _PLACEHOLDER_SYSTEM_PROMPT},
-                    {"role": "user", "content": _placeholder_serialize_state(state)},
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_context},
                 ],
                 response_format={
                     "type": "json_schema",

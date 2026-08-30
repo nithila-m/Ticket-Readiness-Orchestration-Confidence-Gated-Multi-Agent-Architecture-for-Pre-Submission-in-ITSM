@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # Groq - Agent 2 (Adaptive Clarifier) - free tier, no credit card required
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-20b"  # strict structured-output support confirmed
+    max_clarification_turns: int = 3
 
 
 settings = Settings()
