@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VIT IT Service Desk — TRO Assistant</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="header-left">
+        <div class="header-title">VIT IT Service Desk</div>
+        <div class="header-subtitle">TRO Assistant · Pre-Submission Ticket Readiness</div>
+      </div>
+      <div class="header-right">
+        <span id="statusDot" class="status-dot" title="Backend status"></span>
+        <span id="statusLabel" class="status-label">checking…</span>
+        <button id="newChatBtn" class="btn-ghost" title="Start a new conversation">↺ New Chat</button>
+      </div>
+    </header>
+
+    <main class="chat-shell">
+      <!-- Welcome / empty state -->
+      <section id="welcomeState" class="welcome-state">
+        <div class="welcome-icon">💬</div>
+        <h1>How can we help you today?</h1>
+        <p>Describe your issue in your own words, or pick a category to get started.</p>
+
+        <div id="categoryChips" class="chip-row"></div>
+
+        <div class="welcome-input">
+          <textarea id="welcomeInput" rows="2" placeholder="e.g. My wifi keeps dropping every few minutes…"></textarea>
+          <button id="welcomeSendBtn" class="btn-primary">Start</button>
+        </div>
+      </section>
+
+      <!-- Active chat -->
+      <section id="chatState" class="chat-state hidden">
+        <div id="turnBadge" class="turn-badge">Turn 0</div>
+        <div id="messages" class="messages"></div>
+
+        <div id="quickReplies" class="chip-row quick-replies hidden"></div>
+
+        <div id="completionCard" class="completion-card hidden"></div>
+
+        <form id="composerForm" class="composer">
+          <input
+            id="composerInput"
+            type="text"
+            autocomplete="off"
+            placeholder="Type your reply…"
+          />
+          <button type="submit" id="composerSendBtn" class="btn-primary">Send</button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
