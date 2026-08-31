@@ -1,0 +1,58 @@
+[
+  {
+    "kb_id": "KB0201",
+    "category": "Printer Support",
+    "title": "Printer showing 'Offline' despite being powered on",
+    "symptoms": "Printer status shows offline on all/some PCs; device itself is powered and connected",
+    "resolution": "1. Restart the print spooler service on the affected PC\n2. Remove and re-add the printer using its current network address\n3. Power-cycle the printer if spooler restart doesn't resolve it"
+  },
+  {
+    "kb_id": "KB0202",
+    "category": "Printer Support",
+    "title": "Print spooler service won't start (Error 1068)",
+    "symptoms": "'Print Spooler service is not running' and manual start fails, often after a Windows update",
+    "resolution": "1. Restart the Remote Procedure Call (RPC) service, which the spooler depends on\n2. Clear the print spooler queue folder of stuck jobs\n3. Reinstall or roll back the printer driver if the issue persists after a clean restart"
+  },
+  {
+    "kb_id": "KB0203",
+    "category": "Printer Support",
+    "title": "Print jobs stuck in queue, nothing prints",
+    "symptoms": "Job sits in queue indefinitely; resending doesn't help",
+    "resolution": "1. Cancel all stuck jobs and clear the print queue\n2. Restart the print spooler service\n3. Resend a single test print job before resuming normal use"
+  },
+  {
+    "kb_id": "KB0204",
+    "category": "Printer Support",
+    "title": "Faded, streaky, or blank printouts",
+    "symptoms": "Pages print with faded streaks, blank patches, or blank pages despite low-toner warning",
+    "resolution": "1. Remove and gently shake the toner/ink cartridge to redistribute remaining toner\n2. Run the printer's built-in cleaning/alignment utility\n3. Replace cartridge if streaking persists after cleaning"
+  },
+  {
+    "kb_id": "KB0205",
+    "category": "Printer Support",
+    "title": "Wireless printer disappears from network after Wi-Fi maintenance",
+    "symptoms": "Printer previously worked over Wi-Fi, no longer appears in device list after network changes",
+    "resolution": "1. Confirm printer is connected to the current correct network SSID (may have changed post-maintenance)\n2. Re-add the printer via its updated IP or reconnect via the printer's own network setup menu\n3. Restart printer and affected PC before re-adding if it still isn't discoverable"
+  },
+  {
+    "kb_id": "KB0206",
+    "category": "Printer Support",
+    "title": "Repeated paper jams on same printer",
+    "symptoms": "Paper jams every few pages; clearing visible jam doesn't fully resolve it",
+    "resolution": "1. Check paper tray for overfilling, incorrect paper size, or worn feed rollers\n2. Fan and realign the paper stack before reloading\n3. Clean paper feed rollers if jams continue after reloading correctly"
+  },
+  {
+    "kb_id": "KB0207",
+    "category": "Printer Support",
+    "title": "Duplex (double-sided) printing not working",
+    "symptoms": "Duplex option selected but printer only prints single-sided and stops",
+    "resolution": "1. Confirm the printer's duplex unit/tray is properly seated\n2. Update or reinstall the printer driver, as duplex settings can be lost after driver corruption\n3. Test duplex printing directly from printer's own test-page function to isolate driver vs. hardware cause"
+  },
+  {
+    "kb_id": "KB0208",
+    "category": "Printer Support",
+    "title": "Vertical lines or streaks on every printout",
+    "symptoms": "Thin vertical lines appear consistently across printed pages, including blank test pages",
+    "resolution": "1. Run the printer's print-head/drum cleaning cycle\n2. Inspect and clean the scanner glass/drum contacts for dust or toner residue\n3. Replace the drum unit if lines persist after cleaning (usually indicates drum wear, not a settings issue)"
+  }
+]

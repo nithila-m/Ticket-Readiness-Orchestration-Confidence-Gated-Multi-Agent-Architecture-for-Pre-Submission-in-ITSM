@@ -1,0 +1,58 @@
+[
+  {
+    "kb_id": "KB0301",
+    "category": "Network / Remote Access",
+    "title": "VPN disconnects after laptop wakes from sleep",
+    "symptoms": "VPN drops immediately after resuming from sleep/hibernate",
+    "resolution": "1. Update VPN client to latest version\n2. Disable 'fast startup' in power settings\n3. Reconnect manually after wake"
+  },
+  {
+    "kb_id": "KB0302",
+    "category": "Wifi/Internet Support",
+    "title": "Wi-Fi disconnects repeatedly after device wakes from sleep",
+    "symptoms": "Connection drops or shows 'limited connectivity' right after laptop/phone wakes from sleep or standby",
+    "resolution": "1. Disable 'fast startup' in power settings on Windows devices\n2. Forget and re-join the campus Wi-Fi network\n3. Update the device's wireless network adapter driver"
+  },
+  {
+    "kb_id": "KB0303",
+    "category": "Wifi/Internet Support",
+    "title": "Captive portal login page not loading",
+    "symptoms": "Device connects to Wi-Fi SSID but the login/authentication page never appears in the browser",
+    "resolution": "1. Open a plain HTTP (not HTTPS) page to trigger the captive portal manually\n2. Clear browser cache/cookies or try a different browser\n3. Forget the network and reconnect to force the portal to re-trigger"
+  },
+  {
+    "kb_id": "KB0304",
+    "category": "Wifi/Internet Support",
+    "title": "Wi-Fi very slow despite full signal strength",
+    "symptoms": "Full signal bars shown but browsing/downloads are extremely slow or time out",
+    "resolution": "1. Check if issue is isolated to one device or affects multiple devices in the same area (indicates local vs. AP-level issue)\n2. Switch to the 5GHz band if the device supports it, as 2.4GHz is often congested\n3. Restart the device's Wi-Fi adapter or reboot the device"
+  },
+  {
+    "kb_id": "KB0305",
+    "category": "Wifi/Internet Support",
+    "title": "Device shows 'connected, no internet'",
+    "symptoms": "Wi-Fi icon shows connected with full bars, but no webpages load and apps fail to sync",
+    "resolution": "1. Toggle Wi-Fi off and on, or restart the device's network adapter\n2. Forget the network and reconnect with fresh authentication\n3. Test on a second device in the same location to confirm if it's device-specific or area-wide"
+  },
+  {
+    "kb_id": "KB0306",
+    "category": "Wifi/Internet Support",
+    "title": "Cannot connect to Wi-Fi with correct password",
+    "symptoms": "Device repeatedly fails to authenticate to the campus Wi-Fi despite entering the correct AD credentials",
+    "resolution": "1. Confirm AD account is not locked (test login on the campus portal separately)\n2. Delete the saved Wi-Fi profile on the device and re-add it from scratch\n3. Verify device date/time is correct, as clock skew can break certificate-based authentication"
+  },
+  {
+    "kb_id": "KB0307",
+    "category": "Wifi/Internet Support",
+    "title": "Intermittent Wi-Fi drops affecting multiple users in one area",
+    "symptoms": "Several users in the same room/floor report random disconnects within the same short time window",
+    "resolution": "1. Check for reported access point issues in the affected zone before troubleshooting individual devices\n2. Ask affected users to note exact time and location for correlation\n3. Escalate to network team for access point signal/load review if pattern spans multiple users"
+  },
+  {
+    "kb_id": "KB0308",
+    "category": "Wifi/Internet Support",
+    "title": "Wi-Fi works on phone but not on laptop in same room",
+    "symptoms": "One device type fails to connect or stay connected while another device type in the identical location works fine",
+    "resolution": "1. Confirm laptop's wireless driver is up to date\n2. Check laptop is attempting the correct SSID and not an outdated/duplicate saved profile\n3. Reset network settings on the laptop if driver update doesn't resolve it"
+  }
+]

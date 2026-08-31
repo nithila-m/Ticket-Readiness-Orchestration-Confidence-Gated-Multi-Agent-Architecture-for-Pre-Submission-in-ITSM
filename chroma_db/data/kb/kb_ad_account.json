@@ -1,0 +1,58 @@
+[
+  {
+    "kb_id": "KB0101",
+    "category": "AD Account Creation",
+    "title": "Account locked out after multiple failed login attempts",
+    "symptoms": "'Account locked' message after several incorrect password entries; user certain password is correct",
+    "resolution": "1. Confirm no other device/app (old phone, cached credential) is silently retrying an old password\n2. Wait for auto-unlock window (typically 30 minutes) or request manual unlock if urgent\n3. Update saved credentials on all devices once unlocked to prevent repeat lockout"
+  },
+  {
+    "kb_id": "KB0102",
+    "category": "AD Account Creation",
+    "title": "New account can log in but mailbox not provisioned",
+    "symptoms": "AD/portal login succeeds, but Outlook or webmail shows 'mailbox not found' for a freshly created account",
+    "resolution": "1. Mailbox provisioning can lag AD account creation by up to 24 hours - confirm elapsed time first\n2. If beyond 24 hours, check mailbox provisioning queue status\n3. Manually trigger mailbox creation sync if still missing after 24 hours"
+  },
+  {
+    "kb_id": "KB0103",
+    "category": "AD Account Creation",
+    "title": "Password expired / forced reset on login",
+    "symptoms": "'Your password has expired, contact administrator' on any device",
+    "resolution": "1. Use self-service password reset portal if enrolled\n2. If not enrolled, verify identity via registered mobile/email OTP\n3. Set new password following complexity policy; re-authenticate on all devices"
+  },
+  {
+    "kb_id": "KB0104",
+    "category": "AD Account Creation",
+    "title": "Password reset link expired before use",
+    "symptoms": "Reset link from self-service portal returns 'link expired' when clicked",
+    "resolution": "1. Reset links are valid for 15-30 minutes only - request a fresh link\n2. Complete the reset promptly after receiving the email\n3. If repeatedly expiring, check for delayed email delivery/spam filtering delaying access to the link"
+  },
+  {
+    "kb_id": "KB0105",
+    "category": "AD Account Creation",
+    "title": "New employee/contractor account stuck in 'pending HR approval'",
+    "symptoms": "Account request submitted, dept confirms approval, but AD account never appears",
+    "resolution": "1. Check for HR-record name/ID mismatch (common cause of silent rejection)\n2. Confirm employee code was entered correctly on the request form\n3. Resubmit with corrected details if mismatch found; escalate to AD provisioning team if data is correct but still stuck"
+  },
+  {
+    "kb_id": "KB0106",
+    "category": "AD Account Creation",
+    "title": "VPN access denied for a newly created account",
+    "symptoms": "Portal/PC login works, but VPN client rejects credentials with a group-policy or access-group error",
+    "resolution": "1. New accounts may take up to 24 hours to sync into VPN access groups\n2. Confirm the account was requested with VPN access enabled on the original form\n3. If still failing after 24 hours, request manual group assignment"
+  },
+  {
+    "kb_id": "KB0107",
+    "category": "AD Account Creation",
+    "title": "Forgotten AD username/login ID format",
+    "symptoms": "User unsure of correct username format (with/without dots, reg no vs. custom ID)",
+    "resolution": "1. Username format is generally firstinitial.lastname for staff, registration number for students\n2. Use the 'forgot username' lookup on the self-service portal with registered mobile/email\n3. Contact CTS with ID proof if lookup fails"
+  },
+  {
+    "kb_id": "KB0108",
+    "category": "AD Account Creation",
+    "title": "Old mailbox data missing after account merge/migration",
+    "symptoms": "Account works fine, but historical email disappears after a contractual-to-permanent account merge",
+    "resolution": "1. Migrated mail can take 24-48 hours to fully re-index and appear\n2. Check both webmail and desktop client, as sync timing can differ\n3. If mail is still missing after 48 hours, request a mailbox migration status check rather than a fresh merge attempt"
+  }
+]

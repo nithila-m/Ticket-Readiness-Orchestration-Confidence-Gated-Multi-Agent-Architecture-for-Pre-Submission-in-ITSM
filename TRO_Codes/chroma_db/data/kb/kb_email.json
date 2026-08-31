@@ -1,0 +1,58 @@
+[
+ {
+    "kb_id": "KB0501",
+    "category": "VIT Email",
+    "title": "Outlook repeatedly prompts for password without accepting it",
+    "symptoms": "Outlook desktop app loops asking for credentials even though the same password works on webmail",
+    "resolution": "1. Remove and re-add the account profile in Outlook\n2. Update Outlook to the latest version\n3. Clear saved/cached credentials for Outlook in the device's credential manager"
+  },
+  {
+    "kb_id": "KB0502",
+    "category": "VIT Email",
+    "title": "Mailbox storage full, unable to send or receive mail",
+    "symptoms": "Bounce-back messages or 'mailbox full' warnings when sending; new mail fails to arrive",
+    "resolution": "1. Empty Deleted Items and Junk folders to free up space immediately\n2. Archive or delete large attachments from older emails\n3. Request a mailbox quota increase if usage is legitimately high"
+  },
+  {
+    "kb_id": "KB0503",
+    "category": "VIT Email",
+    "title": "Legitimate emails going to Junk/Spam folder",
+    "symptoms": "Expected emails from known senders consistently land in Junk instead of Inbox",
+    "resolution": "1. Add the sender's address to the Safe Senders list\n2. Review and adjust junk email filter sensitivity settings\n3. Report the specific email as 'Not Junk' to help retrain the filter"
+  },
+  {
+    "kb_id": "KB0504",
+    "category": "VIT Email",
+    "title": "Old emails missing after account merge or migration",
+    "symptoms": "Mailbox shows only recent emails; historical mail from before a migration/merge event is gone",
+    "resolution": "1. Allow 24-48 hours for full re-indexing after any migration or merge event\n2. Check both webmail and desktop client, as sync timing can differ between them\n3. Request a mailbox migration status check if mail is still missing after 48 hours"
+  },
+  {
+    "kb_id": "KB0505",
+    "category": "VIT Email",
+    "title": "Unable to send emails to external (non-VIT) addresses",
+    "symptoms": "Emails to external domains bounce or fail, while internal VIT-to-VIT emails send normally",
+    "resolution": "1. Check the specific bounce-back message for an external mail relay restriction\n2. Confirm the account isn't flagged for restricted outbound relay (common for new/contractual accounts)\n3. Request outbound relay permission review if restriction is confirmed"
+  },
+  {
+    "kb_id": "KB0506",
+    "category": "VIT Email",
+    "title": "Mail not syncing on mobile device",
+    "symptoms": "New emails appear on webmail/desktop but not on the mobile Outlook or native mail app",
+    "resolution": "1. Remove and re-add the email account on the mobile device\n2. Confirm mobile app has background sync/refresh permission enabled\n3. Check for an expired app password if using a legacy mail client requiring one"
+  },
+  {
+    "kb_id": "KB0507",
+    "category": "VIT Email",
+    "title": "Shared/departmental mailbox not accessible",
+    "symptoms": "User with prior access to a shared mailbox suddenly cannot open or send-as from it",
+    "resolution": "1. Confirm shared mailbox permissions haven't been modified or removed on the backend\n2. Remove and re-add the shared mailbox in Outlook to refresh the connection\n3. Re-request delegate/send-as access if permissions were confirmed removed"
+  },
+  {
+    "kb_id": "KB0508",
+    "category": "VIT Email",
+    "title": "Auto-forwarding or rules not working as configured",
+    "symptoms": "Email rules set up by the user (forwarding, categorizing) silently stop functioning",
+    "resolution": "1. Verify the rule wasn't disabled by a security policy blocking auto-forward to external addresses\n2. Recreate the rule from scratch, as corrupted rules can silently fail\n3. Check rule order/conflicts if multiple rules exist for overlapping conditions"
+  }
+]
