@@ -1,0 +1,8 @@
+venv/
+.env
+__pycache__/
+*.pyc
+chroma_data/
+audit.db
+.idea/
+.vscode/
