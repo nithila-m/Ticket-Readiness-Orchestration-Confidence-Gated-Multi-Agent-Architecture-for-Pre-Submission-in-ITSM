@@ -1,6 +1,7 @@
 from fastapi import Depends, FastAPI, HTTPException
 
-from app.core.settings import settings
+from app.api.clarification_router import router as clarification_router
+from app.config.settings import settings
 from app.dependencies import get_ticket_analysis_service
 from app.providers.exceptions import LLMProviderError
 from app.schemas.analysis import AnalysisResult
@@ -8,6 +9,8 @@ from app.schemas.conversation import UserMessageRequest
 from app.services.ticket_analysis_service import TicketAnalysisService
 
 app = FastAPI(title="TRO - Ticket Readiness Orchestration", version="0.1.0")
+
+app.include_router(clarification_router)
 
 
 @app.get("/health")
