@@ -51,6 +51,8 @@ async def main():
         if decision.question:
             print(f"Question: {decision.question}")
         print(f"Reasoning: {decision.reasoning}")
+        print(f"Expected information gain: {decision.expected_information_gain}")
+        print(f"Confidence: {decision.confidence}")
 
         if decision.action in ("READY", "ESCALATE"):
             print(f"\nConversation terminated at turn {i} with action={decision.action}.")
