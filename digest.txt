@@ -1,5 +1,6 @@
 Directory structure:
 └── TRO/
+    ├── M5.11_Agent2_Implementation_Report.docx
     ├── pytest.ini
     ├── requirements.txt
     ├── .env.example
@@ -8,24 +9,39 @@ Directory structure:
     │   ├── dependencies.py
     │   ├── main.py
     │   ├── agents/
+    │   │   ├── adaptive_clarifier.py
+    │   │   ├── adaptive_clarifier_prompts.py
+    │   │   ├── clarification_context.py
     │   │   ├── completeness_scorer.py
     │   │   └── information_extractor.py
+    │   ├── api/
+    │   │   └── clarification_router.py
     │   ├── config/
-    │   │   └── category_profiles.py
-    │   ├── core/
-    │   │   ├── __init__.py
+    │   │   ├── category_profiles.py
     │   │   └── settings.py
+    │   ├── core/
+    │   │   └── __init__.py
     │   ├── providers/
     │   │   ├── base.py
+    │   │   ├── clarification_base.py
     │   │   ├── exceptions.py
-    │   │   └── gemini_provider.py
+    │   │   ├── fake_clarification_provider.py
+    │   │   ├── gemini_provider.py
+    │   │   └── groq_clarification_provider.py
+    │   ├── repositories/
+    │   │   ├── __init__.py
+    │   │   ├── base.py
+    │   │   └── in_memory_conversation_repository.py
     │   ├── schemas/
     │   │   ├── __init__.py
     │   │   ├── analysis.py
+    │   │   ├── clarification.py
     │   │   ├── conversation.py
     │   │   └── extraction.py
     │   └── services/
-    │       └── ticket_analysis_service.py
+    │       ├── clarification_service.py
+    │       ├── ticket_analysis_service.py
+    │       └── transcript_formatter.py
     ├── data/
     │   └── eval/
     │       ├── ad_account_creation.json
@@ -33,10 +49,25 @@ Directory structure:
     │       ├── printer_support.json
     │       ├── vit_email.json
     │       └── wifi_internet.json
+    ├── frontend/
+    │   ├── app.js
+    │   ├── index.html
+    │   └── style.css
     ├── results/
-    │   └── agent1_eval_results.csv
+    │   ├── agent1_eval_results.csv
+    │   ├── calibration_summary.md
+    │   ├── category_classifier_cv_report.md
+    │   └── confidence_calibration_raw.csv
     ├── scripts/
-    │   └── run_agent1_eval.py
+    │   ├── analyze_calibration.py
+    │   ├── run_agent1_eval.py
+    │   ├── run_agent2_eval.py
+    │   ├── run_agent2_scenarios.py
+    │   ├── run_confidence_calibration_eval.py
+    │   ├── smoke_test_adaptive_clarifier.py
+    │   ├── smoke_test_clarification_service.py
+    │   ├── smoke_test_groq_provider.py
+    │   └── train_category_classifier.py
     └── tests/
         ├── README.md
         ├── __init__.py
@@ -46,13 +77,30 @@ Directory structure:
         ├── test_gemini_provider.py
         ├── test_information_extractor.py
         ├── test_schemas.py
-        └── test_ticket_analysis_service.py
+        ├── test_ticket_analysis_service.py
+        ├── eval/
+        │   ├── agent2_scenarios.py
+        │   ├── dimension_map.py
+        │   ├── dimension_scores_latest.md
+        │   ├── human_verdicts.py
+        │   └── results_latest.md
+        └── unit/
+            ├── test_adaptive_clarifier.py
+            ├── test_clarification_context.py
+            └── test_clarification_service.py
+
+================================================
+FILE: M5.11_Agent2_Implementation_Report.docx
+================================================
+[Binary file]
+
 
 ================================================
 FILE: pytest.ini
 ================================================
 [pytest]
 asyncio_mode = auto
+pythonpath = .
 
 
 ================================================
@@ -66,6 +114,8 @@ pytest==8.3.4
 httpx==0.28.1
 google-genai==1.29.0
 pytest-asyncio==0.25.0
+groq>=0.11.5
+pytest-asyncio>=0.24.0
 
 
 ================================================
@@ -90,9 +140,13 @@ FILE: app/dependencies.py
 ================================================
 from functools import lru_cache
 
+from app.agents.adaptive_clarifier import AdaptiveClarifier
 from app.agents.information_extractor import InformationExtractor
-from app.core.settings import settings
+from app.config.settings import settings
 from app.providers.gemini_provider import GeminiProvider
+from app.providers.groq_clarification_provider import GroqClarificationProvider
+from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
+from app.services.clarification_service import ClarificationService
 from app.services.ticket_analysis_service import TicketAnalysisService
 
 
@@ -110,12 +164,51 @@ def get_ticket_analysis_service() -> TicketAnalysisService:
     return TicketAnalysisService(extractor)
 
 
+@lru_cache
+def get_conversation_repository() -> InMemoryConversationRepository:
+    """
+    Singleton in-memory store for ConversationState, keyed by conversation_id.
+    Cached so all requests across the app's lifetime share the same store -
+    a fresh instance per request would make multi-turn conversations
+    impossible, since state would never persist between calls.
+    """
+    return InMemoryConversationRepository()
+
+
+@lru_cache
+def get_clarification_service() -> ClarificationService:
+    """
+    Builds the real, Groq-backed ClarificationService for Agent 2.
+    Reuses get_ticket_analysis_service() for Agent 1 rather than
+    constructing a second GeminiProvider/extractor - one extraction
+    pipeline shared by both /analyze and the conversational endpoint.
+    Cached as a singleton; only instantiated on first actual call to the
+    conversational endpoint, not at app startup - mirrors
+    get_ticket_analysis_service's own no-key-needed-at-startup property.
+    """
+    extraction_service = get_ticket_analysis_service()
+
+    groq_provider = GroqClarificationProvider(
+        api_key=settings.groq_api_key, model=settings.groq_model
+    )
+    clarifier = AdaptiveClarifier(
+        provider=groq_provider, max_turns=settings.max_clarification_turns
+    )
+
+    repository = get_conversation_repository()
+
+    return ClarificationService(extraction_service, clarifier, repository)
+
+
 ================================================
 FILE: app/main.py
 ================================================
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from app.core.settings import settings
+from app.api.clarification_router import router as clarification_router
+from app.config.settings import settings
 from app.dependencies import get_ticket_analysis_service
 from app.providers.exceptions import LLMProviderError
 from app.schemas.analysis import AnalysisResult
@@ -123,6 +216,20 @@ from app.schemas.conversation import UserMessageRequest
 from app.services.ticket_analysis_service import TicketAnalysisService
 
 app = FastAPI(title="TRO - Ticket Readiness Orchestration", version="0.1.0")
+
+# Demo-only CORS: allows the frontend to be opened from a different origin
+# (e.g. a separate dev server) if you choose not to use the static mount
+# below. Same-origin requests (the default /chat mount) don't need this,
+# but it's harmless to leave on for a local demo.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(clarification_router)
 
 
 @app.get("/health")
@@ -142,6 +249,332 @@ async def analyze_ticket(
         return await service.analyze(request.message)
     except LLMProviderError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# Serves frontend/index.html, style.css, app.js at /chat/*.
+# Placed after the API routes so it can never shadow them.
+app.mount("/chat", StaticFiles(directory="frontend", html=True), name="frontend")
+
+
+================================================
+FILE: app/agents/adaptive_clarifier.py
+================================================
+"""
+Agent 2: Adaptive Clarifier.
+
+Thin wrapper around a ClarificationProvider with exactly one deterministic
+safeguard layered on top: if the LLM still wants to ask another question
+after the turn budget is exhausted, force ESCALATE instead. This is a
+safety net against the documented ClarifyMT-Bench Refusal-persona failure
+mode (digest.txt Section 17/17-equivalent), not a decision-making
+mechanism - the model's actual judgment is never second-guessed for any
+other reason.
+
+The override is deliberately a standalone pure function, not inlined into
+decide(), so it can be unit-tested directly with hand-built
+ClarificationDecision objects (see tests/unit/test_adaptive_clarifier.py)
+without touching a provider, live or fake.
+"""
+
+from app.providers.clarification_base import ClarificationProvider
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState
+
+FORCED_ESCALATION_TAG = "[turn budget exceeded - forced escalation]"
+
+
+def _apply_turn_budget_safeguard(
+    decision: ClarificationDecision,
+    turn_count: int,
+    max_turns: int,
+) -> ClarificationDecision:
+    """
+    If the model wants to ask another question but the turn budget is
+    already exhausted, override to ESCALATE. Every other action (READY,
+    RECHECK, ESCALATE) passes through untouched - this only fires on the
+    one combination that could otherwise loop indefinitely.
+    """
+    if decision.action != "ASK_CLARIFICATION" or turn_count < max_turns:
+        return decision
+
+    return ClarificationDecision(
+        action="ESCALATE",
+        reasoning=f"{FORCED_ESCALATION_TAG} Original model reasoning: {decision.reasoning}",
+        information_gap=decision.information_gap,
+        question=None,
+        expected_information_gain=decision.expected_information_gain,
+        affected_fields=decision.affected_fields,
+        priority="high",
+        confidence=decision.confidence,
+    )
+
+
+def was_forced_escalation(decision: ClarificationDecision) -> bool:
+    """
+    True if this decision was produced by the turn-budget safeguard
+    rather than the model's own judgment. Used by eval/audit code to
+    separate genuine model decisions from safety-net overrides -
+    conflating the two would misrepresent how often the agent itself
+    chooses to stop asking.
+    """
+    return decision.action == "ESCALATE" and decision.reasoning.startswith(
+        FORCED_ESCALATION_TAG
+    )
+
+
+class AdaptiveClarifier:
+    """Agent 2. Wraps a ClarificationProvider with the turn-budget safeguard."""
+
+    def __init__(self, provider: ClarificationProvider, max_turns: int):
+        self._provider = provider
+        self._max_turns = max_turns
+
+    async def decide(self, state: ConversationState) -> ClarificationDecision:
+        decision = await self._provider.decide_clarification(state)
+        return _apply_turn_budget_safeguard(
+            decision, turn_count=state.turn_count, max_turns=self._max_turns
+        )
+
+
+================================================
+FILE: app/agents/adaptive_clarifier_prompts.py
+================================================
+"""
+Static system prompt for Agent 2 (Adaptive Clarifier).
+
+Deliberately category-agnostic: category-specific field weights are
+injected per-turn by clarification_context.build_agent2_context, not
+baked in here, so this file doesn't need editing when category_profiles.py
+changes.
+
+LOCKED as of M5.9 prep - do not edit without re-running the full behavioral
+eval suite (M5.9/M5.10) afterward, since prior results and saved example
+transcripts become stale otherwise.
+"""
+
+SYSTEM_PROMPT = """You are Agent 2, the Adaptive Clarification agent for \
+VIT's IT service desk (TRO system).
+
+Your job is NOT to find the first missing field and ask about it. Your job \
+is to determine whether the ticket is actionable and, if not, identify the \
+minimum additional information that would most improve diagnosis, routing, \
+prioritization, or resolution.
+
+You will receive: the full conversation transcript, the detected category \
+and its confidence, a completeness score, a field-importance weight table \
+for the detected category, the current status of every profile field \
+(resolved / low-confidence / not mentioned), the full history of prior \
+clarification questions and their answers, and the current turn count \
+against the turn budget.
+
+The transcript is the primary evidence for what the user actually said. \
+Treat extracted fields, completeness scores, and field weights as \
+decision-support signals rather than unquestionable facts.
+
+Your primary objective is to maximize expected ticket actionability gained \
+from the next conversational action while minimizing unnecessary user \
+effort and conversation turns. For each plausible next action, consider: \
+how much uncertainty it would remove, whether it could change diagnosis or \
+routing, whether it resolves multiple related uncertainties at once, \
+whether the answer is realistically obtainable from the user, and whether \
+another turn is actually worth spending. Do not select a question merely \
+because its field has the highest weight - select the action with the \
+highest expected information value for this specific conversation.
+
+When multiple interpretations of the issue are plausible, reason about the \
+competing interpretations before choosing an action. Prefer a \
+clarification that distinguishes between materially different diagnoses, \
+routing destinations, or support procedures over one that only narrows a \
+single already-likely interpretation.
+
+Choose exactly one action:
+
+- ASK_CLARIFICATION: ask one targeted question, only when there is a \
+specific unresolved uncertainty whose answer is likely to materially \
+improve ticket handling. Never ask solely to raise the completeness score.
+- READY: the ticket is actionable with the information currently \
+available, because remaining gaps are unlikely to materially change \
+diagnosis, routing, prioritization, or resolution. Completeness != \
+readiness - a lower score can still be READY if the issue is specific \
+enough, and a higher score can still need one more question if a critical \
+ambiguity remains.
+- RECHECK: the latest user message materially conflicts with the currently \
+extracted state or earlier conversation, and the conflict cannot safely be \
+resolved from the conversation alone. RECHECK signals that Agent 1 should \
+re-extract against the full updated conversation - it does not mean you \
+have decided which version is correct yourself.
+- ESCALATE: continued clarification is unlikely to help, the user is \
+refusing or unable to provide useful information, or the issue needs \
+human judgment.
+
+Hard rules:
+- Never ask about a field whose status is already "resolved" above.
+- Before asking, check the entire prior clarification Q&A history and the \
+transcript itself: if the user's past statements already semantically \
+cover what you're about to ask - even stated in different words, or never \
+mapped into the expected field by Agent 1 - do not ask again.
+- Never state or imply a fact that was not actually provided by the user.
+- Field-importance weights indicate potential support value, not a fixed \
+order to ask in - a lower-weighted field that resolves ambiguity between \
+two plausible interpretations can matter more in a specific conversation \
+than a higher-weighted one that's already clear from context.
+- Prefer one question that resolves multiple tightly related uncertainties \
+over several independent narrow questions. Do not combine unrelated \
+questions into one message disguised as a single question.
+- Avoid generic questions such as "can you provide more details?" - be \
+specific to the actual uncertainty. Use user-facing language, not internal \
+field names.
+- As the turn count approaches the budget, weigh the cost of another turn \
+more heavily and become more willing to choose READY or ESCALATE over \
+ASK_CLARIFICATION for anything short of a genuinely high-value question.
+
+Return a single ClarificationDecision object. The "reasoning" field should \
+be a concise, human-readable justification suitable for an audit log - not \
+raw internal chain-of-thought."""
+
+
+================================================
+FILE: app/agents/clarification_context.py
+================================================
+"""
+Pure functions that turn a ConversationState into the context Agent 2's
+prompt needs. No LLM calls here - everything is deterministic and
+independently unit-testable (see tests/unit/test_clarification_context.py).
+
+This module deliberately re-derives the missing-vs-uncertain distinction
+that completeness_scorer.py collapses into one list, reusing its own
+CONFIDENCE_THRESHOLD as the single source of truth for what counts as
+"uncertain" rather than hardcoding a second copy of that number here.
+"""
+
+from app.agents.completeness_scorer import CONFIDENCE_THRESHOLD
+from app.config.category_profiles import get_profile
+from app.schemas.clarification import ClarificationLogEntry
+from app.schemas.conversation import ConversationState, Message
+from app.schemas.extraction import ExtractedField
+
+
+def classify_field_gaps(
+    category: str | None,
+    extracted_fields: dict[str, ExtractedField],
+) -> tuple[list[str], list[str]]:
+    """
+    Split a category's profile fields into (never_extracted, uncertain).
+    never_extracted: the field is absent from extracted_fields entirely.
+    uncertain: the field is present but value is None or confidence is low.
+    """
+    profile = get_profile(category)
+    never_extracted: list[str] = []
+    uncertain: list[str] = []
+
+    for field_name in profile:
+        field = extracted_fields.get(field_name)
+        if field is None:
+            never_extracted.append(field_name)
+        elif field.value is None or field.confidence < CONFIDENCE_THRESHOLD:
+            uncertain.append(field_name)
+
+    return never_extracted, uncertain
+
+
+def format_category_profile(category: str | None) -> str:
+    """Render the detected category's field-weight table for the prompt."""
+    profile = get_profile(category)
+    label = category or "general (category undetermined)"
+    lines = [f"Field importance weights for category '{label}':"]
+    for field_name, weight in sorted(profile.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  - {field_name}: {weight}")
+    return "\n".join(lines)
+
+
+def format_extraction_snapshot(
+    category: str | None,
+    extracted_fields: dict[str, ExtractedField],
+) -> str:
+    """Render every profile field's current known status."""
+    profile = get_profile(category)
+    never_extracted, uncertain = classify_field_gaps(category, extracted_fields)
+    lines = ["Current extraction state:"]
+
+    for field_name in profile:
+        if field_name in never_extracted:
+            lines.append(f"  - {field_name}: NOT MENTIONED YET")
+        elif field_name in uncertain:
+            field = extracted_fields[field_name]
+            lines.append(
+                f"  - {field_name}: value={field.value!r}, "
+                f"confidence={field.confidence:.2f} (LOW CONFIDENCE)"
+            )
+        else:
+            field = extracted_fields[field_name]
+            lines.append(
+                f"  - {field_name}: value={field.value!r}, "
+                f"confidence={field.confidence:.2f} (resolved)"
+            )
+
+    return "\n".join(lines)
+
+
+def format_conversation_transcript(raw_messages: list[Message]) -> str:
+    if not raw_messages:
+        return "(no messages yet)"
+    lines = []
+    for msg in raw_messages:
+        speaker = "User" if msg.role == "user" else "Agent"
+        lines.append(f"{speaker}: {msg.content}")
+    return "\n".join(lines)
+
+
+def format_clarification_history(clarification_log: list[ClarificationLogEntry]) -> str:
+    """
+    Pair each prior question with the user's next message (its de facto
+    answer), so the model can check semantically whether something it's
+    about to ask has already been resolved - per digest.txt Section 15,
+    this must not collapse into a string-equality check; giving the model
+    the actual Q&A pairs is what makes semantic redundancy checking possible.
+    """
+    asked_entries = [
+        (i, entry) for i, entry in enumerate(clarification_log) if entry.decision.question
+    ]
+    if not asked_entries:
+        return "No clarification questions have been asked yet this conversation."
+
+    lines = []
+    for i, entry in asked_entries:
+        answer = (
+            clarification_log[i + 1].user_message
+            if i + 1 < len(clarification_log)
+            else "(not yet answered)"
+        )
+        lines.append(f'  Q ("{entry.decision.affected_fields}"): "{entry.decision.question}"')
+        lines.append(f'  A: "{answer}"')
+    return "\n".join(lines)
+
+
+def build_agent2_context(state: ConversationState, max_turns: int) -> str:
+    """Assemble the full user-turn context block sent to the LLM."""
+    category = state.detected_category.value if state.detected_category else None
+    category_confidence = state.detected_category.confidence if state.detected_category else 0.0
+
+    return f"""=== CONVERSATION TRANSCRIPT ===
+{format_conversation_transcript(state.raw_messages)}
+
+=== DETECTED CATEGORY ===
+{category or "undetermined"} (confidence: {category_confidence:.2f})
+
+=== COMPLETENESS SCORE (evidence, not a threshold decision) ===
+{state.completeness_score:.2f}
+
+{format_category_profile(category)}
+
+{format_extraction_snapshot(category, state.extracted_fields)}
+
+=== PRIOR CLARIFICATION Q&A ===
+{format_clarification_history(state.clarification_log)}
+
+=== TURN BUDGET ===
+Current turn: {state.turn_count} / max {max_turns} clarification turns.
+"""
 
 
 ================================================
@@ -252,6 +685,70 @@ class InformationExtractor:
 
 
 ================================================
+FILE: app/api/clarification_router.py
+================================================
+"""
+Conversational endpoint for Agent 2 (Adaptive Clarifier).
+
+Does not touch /analyze - that remains a standalone Agent 1 evaluation
+endpoint. This router owns the multi-turn conversational loop, backed by
+ClarificationService (Agent 1 rerun + Agent 2 decision + persistence).
+All dependencies are wired through app/dependencies.py, reusing the same
+Gemini-backed extraction service /analyze uses rather than constructing
+a second one.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from app.dependencies import get_clarification_service
+from app.providers.exceptions import LLMProviderError
+from app.services.clarification_service import ClarificationService
+
+router = APIRouter(prefix="/conversations", tags=["clarification"])
+
+
+class ConversationMessageRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class ConversationMessageResponse(BaseModel):
+    conversation_id: str
+    turn: int
+    action: str
+    question: str | None
+    category: str | None
+    completeness_score: float
+    affected_fields: list[str]
+    reasoning: str
+    confidence: float
+
+
+@router.post("/{conversation_id}/messages", response_model=ConversationMessageResponse)
+async def post_message(
+    conversation_id: str,
+    body: ConversationMessageRequest,
+    service: ClarificationService = Depends(get_clarification_service),
+) -> ConversationMessageResponse:
+    try:
+        state, decision = await service.handle_message(conversation_id, body.message)
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return ConversationMessageResponse(
+        conversation_id=state.conversation_id,
+        turn=state.turn_count,
+        action=decision.action,
+        question=decision.question,
+        category=state.detected_category.value if state.detected_category else None,
+        completeness_score=state.completeness_score,
+        affected_fields=decision.affected_fields,
+        reasoning=decision.reasoning,
+        confidence=decision.confidence,
+    )
+
+
+================================================
 FILE: app/config/category_profiles.py
 ================================================
 """
@@ -351,13 +848,7 @@ def get_profile(category: str | None) -> dict[str, float]:
 
 
 ================================================
-FILE: app/core/__init__.py
-================================================
-[Empty file]
-
-
-================================================
-FILE: app/core/settings.py
+FILE: app/config/settings.py
 ================================================
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -370,8 +861,19 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash-lite"
 
+    # Groq - Agent 2 (Adaptive Clarifier) - free tier, no credit card required
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-20b"  # strict structured-output support confirmed
+    max_clarification_turns: int = 3
+
 
 settings = Settings()
+
+
+================================================
+FILE: app/core/__init__.py
+================================================
+[Empty file]
 
 
 ================================================
@@ -397,6 +899,25 @@ class LLMProvider(ABC):
 
 
 ================================================
+FILE: app/providers/clarification_base.py
+================================================
+from abc import ABC, abstractmethod
+
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState
+
+
+class ClarificationProvider(ABC):
+    """Abstract interface for Agent 2's decision-making LLM call."""
+
+    @abstractmethod
+    async def decide_clarification(
+        self, state: ConversationState
+    ) -> ClarificationDecision:
+        raise NotImplementedError
+
+
+================================================
 FILE: app/providers/exceptions.py
 ================================================
 class LLMProviderError(Exception):
@@ -405,6 +926,24 @@ class LLMProviderError(Exception):
     def __init__(self, message: str, cause: Exception | None = None):
         super().__init__(message)
         self.cause = cause
+
+
+================================================
+FILE: app/providers/fake_clarification_provider.py
+================================================
+from app.providers.clarification_base import ClarificationProvider
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState
+
+
+class FakeClarificationProvider(ClarificationProvider):
+    """Returns a pre-set decision. Test-only â€” never wired to the real API."""
+
+    def __init__(self, decision: ClarificationDecision):
+        self._decision = decision
+
+    async def decide_clarification(self, state: ConversationState) -> ClarificationDecision:
+        return self._decision
 
 
 ================================================
@@ -522,6 +1061,184 @@ class GeminiProvider(LLMProvider):
 
 
 ================================================
+FILE: app/providers/groq_clarification_provider.py
+================================================
+"""
+Groq provider for Agent 2 (Adaptive Clarifier) - free tier.
+
+Uses Groq's strict json_schema structured-output mode (constrained
+decoding), currently confirmed only on openai/gpt-oss-20b and
+openai/gpt-oss-120b. Strict mode requires every schema property to be
+listed in "required" (nullable fields use a ["type","null"] union
+instead of being omitted) and "additionalProperties": false throughout -
+this is handled by _to_strict_schema below rather than trusting
+Pydantic's default model_json_schema() output as-is.
+
+Defensive fallback mirrors gemini_provider.py: if structured output is
+silently ignored (a known occasional Groq issue) and the model returns
+free-form text instead, we attempt a manual json.loads + Pydantic
+validate before giving up.
+
+Prompt and state serialization live in adaptive_clarifier_prompts.py and
+clarification_context.py respectively (M5.4) - this file only owns the
+API call, schema enforcement, and response parsing.
+"""
+
+import json
+from typing import Any
+
+from groq import AsyncGroq
+from pydantic import BaseModel, ValidationError
+
+from app.agents.adaptive_clarifier_prompts import SYSTEM_PROMPT
+from app.agents.clarification_context import build_agent2_context
+from app.config.settings import settings
+from app.providers.clarification_base import ClarificationProvider
+from app.providers.exceptions import LLMProviderError
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState
+
+
+def _to_strict_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """
+    Convert a Pydantic model's JSON schema into Groq's strict-mode shape:
+    every property required (nullable fields get a type union instead of
+    being optional), additionalProperties: false at every object level.
+    """
+    schema = model.model_json_schema()
+    schema["required"] = list(schema.get("properties", {}).keys())
+    schema["additionalProperties"] = False
+    return schema
+
+
+class GroqClarificationProvider(ClarificationProvider):
+    def __init__(self, api_key: str, model: str):
+        if not api_key:
+            raise LLMProviderError(
+                "Groq API key is missing. Set GROQ_API_KEY in .env "
+                "(free, no credit card - console.groq.com)."
+            )
+        self._client = AsyncGroq(api_key=api_key)
+        self._model = model
+        self._schema = _to_strict_schema(ClarificationDecision)
+
+    async def decide_clarification(self, state: ConversationState) -> ClarificationDecision:
+        user_context = build_agent2_context(
+            state, max_turns=settings.max_clarification_turns
+        )
+
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_context},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "clarification_decision",
+                        "schema": self._schema,
+                        "strict": True,
+                    },
+                },
+            )
+        except Exception as exc:
+            raise LLMProviderError(f"Groq API call failed: {exc}", cause=exc) from exc
+
+        raw_content = response.choices[0].message.content
+        if raw_content is None:
+            raise LLMProviderError("Groq returned an empty response.")
+
+        try:
+            data = json.loads(raw_content)
+            return ClarificationDecision.model_validate(data)
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise LLMProviderError(
+                f"Groq returned a response that didn't match the schema "
+                f"(structured output may have been silently ignored): {exc}",
+                cause=exc,
+            ) from exc
+
+
+================================================
+FILE: app/repositories/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: app/repositories/base.py
+================================================
+"""
+Abstract persistence interface for ConversationState.
+
+Kept deliberately storage-agnostic: an in-memory implementation is enough
+for the Agent 2 milestone and local dev. SQLite/Postgres can implement
+this same interface later without touching any code that depends on it
+(clarification_service.py will depend on this ABC, not on a concrete store).
+"""
+
+from abc import ABC, abstractmethod
+
+from app.schemas.conversation import ConversationState
+
+
+class ConversationRepository(ABC):
+    @abstractmethod
+    async def get(self, conversation_id: str) -> ConversationState | None:
+        """Return the stored state, or None if it doesn't exist yet."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def save(self, state: ConversationState) -> None:
+        """Persist (create or overwrite) the given state."""
+        raise NotImplementedError
+
+    async def get_or_create(self, conversation_id: str) -> ConversationState:
+        """Convenience wrapper: load existing state, or start a fresh one."""
+        existing = await self.get(conversation_id)
+        if existing is not None:
+            return existing
+        fresh = ConversationState(conversation_id=conversation_id)
+        await self.save(fresh)
+        return fresh
+
+
+================================================
+FILE: app/repositories/in_memory_conversation_repository.py
+================================================
+"""
+In-memory ConversationRepository. Process-local, non-persistent across
+restarts - correct for local dev and the Review 2 demo, not for
+production (digest.txt Section 21: no databases yet for this milestone).
+"""
+
+import asyncio
+
+from app.repositories.base import ConversationRepository
+from app.schemas.conversation import ConversationState
+
+
+class InMemoryConversationRepository(ConversationRepository):
+    def __init__(self):
+        self._store: dict[str, ConversationState] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, conversation_id: str) -> ConversationState | None:
+        async with self._lock:
+            state = self._store.get(conversation_id)
+            # Return a copy so callers can't mutate stored state without
+            # going through save() - keeps the repository the single
+            # source of truth for what's "persisted."
+            return state.model_copy(deep=True) if state else None
+
+    async def save(self, state: ConversationState) -> None:
+        async with self._lock:
+            self._store[state.conversation_id] = state.model_copy(deep=True)
+
+
+================================================
 FILE: app/schemas/__init__.py
 ================================================
 [Empty file]
@@ -545,15 +1262,71 @@ class AnalysisResult(BaseModel):
 
 
 ================================================
+FILE: app/schemas/clarification.py
+================================================
+"""
+Agent 2 (Adaptive Clarifier) output schema.
+
+ClarificationDecision is the LLM's structured judgment call, not a
+generated string. See ADAPTIVE_CLARIFIER_SYSTEM_PROMPT for the reasoning
+this schema is meant to capture.
+"""
+
+from datetime import datetime, timezone
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+
+class ClarificationDecision(BaseModel):
+    """A single Agent 2 decision: what to do next, and why."""
+
+    action: Literal["ASK_CLARIFICATION", "READY", "RECHECK", "ESCALATE"]
+    reasoning: str = Field(min_length=1)
+    information_gap: str | None = None
+    question: str | None = None
+    expected_information_gain: float = Field(ge=0.0, le=1.0)
+    affected_fields: list[str] = Field(default_factory=list)
+    priority: Literal["low", "medium", "high"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def enforce_question_matches_action(self):
+        if self.action == "ASK_CLARIFICATION" and not self.question:
+            raise ValueError("ASK_CLARIFICATION requires a non-empty question")
+        if self.action != "ASK_CLARIFICATION" and self.question is not None:
+            raise ValueError(f"question must be null when action is {self.action}")
+        return self
+
+
+class ClarificationLogEntry(BaseModel):
+    """
+    One turn's audit record. Stored on ConversationState.clarification_log.
+    This is what makes the 'genuinely agentic' claim demonstrable rather
+    than just asserted (digest.txt Section 19).
+    """
+
+    turn: int
+    user_message: str
+    decision: ClarificationDecision
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+================================================
 FILE: app/schemas/conversation.py
 ================================================
 from pydantic import BaseModel, Field
+from typing import Literal
 
+from app.schemas.clarification import ClarificationLogEntry
 from app.schemas.extraction import CategoryPrediction, ExtractedField
 
 
 class Message(BaseModel):
-    role: str  # "user" or "system"
+    # "assistant" covers Agent 2's clarifying questions when they're
+    # folded back into the transcript that gets re-sent to Agent 1's
+    # extractor each turn. "system" is reserved, currently unused.
+    role: Literal["user", "assistant", "system"]
     content: str
 
 
@@ -568,7 +1341,7 @@ class ConversationState(BaseModel):
     Full shared state, forward-compatible with Agent 2.
     Agent 1 populates: raw_messages, extracted_fields, detected_category,
     completeness_score, missing_or_uncertain_fields.
-    Agent 2 will later append to clarification_log and increment turn_count.
+    Agent 2 appends to clarification_log and increments turn_count.
     """
 
     conversation_id: str
@@ -578,7 +1351,7 @@ class ConversationState(BaseModel):
     detected_category: CategoryPrediction | None = None
     completeness_score: float = Field(default=0.0, ge=0.0, le=1.0)
     missing_or_uncertain_fields: list[str] = Field(default_factory=list)
-    clarification_log: list[str] = Field(default_factory=list)
+    clarification_log: list[ClarificationLogEntry] = Field(default_factory=list)
 
 
 ================================================
@@ -622,6 +1395,81 @@ class ExtractionResult(BaseModel):
 
 
 ================================================
+FILE: app/services/clarification_service.py
+================================================
+"""
+Orchestrates one conversational turn: append the user's message, rerun
+Agent 1 on the full updated transcript, refresh extraction/completeness/
+category on state, invoke Agent 2, log the decision, persist.
+
+Deliberately does not catch LLMProviderError from either agent - mirrors
+ticket_analysis_service.py's own convention of letting provider failures
+propagate to the API layer rather than being silently masked here.
+"""
+
+from app.agents.adaptive_clarifier import AdaptiveClarifier
+from app.repositories.base import ConversationRepository
+from app.schemas.clarification import ClarificationDecision, ClarificationLogEntry
+from app.schemas.conversation import ConversationState, Message
+from app.services.transcript_formatter import format_transcript_for_extraction
+from app.services.ticket_analysis_service import TicketAnalysisService
+
+
+class ClarificationService:
+    def __init__(
+        self,
+        extraction_service: TicketAnalysisService,
+        clarifier: AdaptiveClarifier,
+        repository: ConversationRepository,
+    ):
+        self._extraction_service = extraction_service
+        self._clarifier = clarifier
+        self._repository = repository
+
+    async def handle_message(
+        self, conversation_id: str, user_message: str
+    ) -> tuple[ConversationState, ClarificationDecision]:
+        state = await self._repository.get_or_create(conversation_id)
+
+        # 1. Append the user's message.
+        state.raw_messages.append(Message(role="user", content=user_message))
+
+        # 2. Rerun Agent 1 on the full updated transcript (not just this message) -
+        #    this is what lets contradiction detection (RECHECK) work: Agent 1
+        #    re-extracts from scratch each turn rather than merging deltas.
+        transcript = format_transcript_for_extraction(state.raw_messages)
+        analysis = await self._extraction_service.analyze(transcript)
+
+        # 3. Refresh extraction-derived fields on state.
+        state.extracted_fields = analysis.extracted_fields
+        state.detected_category = analysis.category
+        state.completeness_score = analysis.completeness_score
+        state.missing_or_uncertain_fields = analysis.missing_or_uncertain_fields
+
+        # 4. Invoke Agent 2 (includes the turn-budget safeguard internally).
+        decision = await self._clarifier.decide(state)
+
+        # 5. If Agent 2 asked a question, fold it into the transcript so the
+        #    NEXT turn's Agent 1 rerun can label it correctly (see decision 2
+        #    in the M5.6 design notes above).
+        if decision.action == "ASK_CLARIFICATION" and decision.question:
+            state.raw_messages.append(Message(role="assistant", content=decision.question))
+
+        # 6. Append the audit log entry, increment turn, persist.
+        state.clarification_log.append(
+            ClarificationLogEntry(
+                turn=state.turn_count,
+                user_message=user_message,
+                decision=decision,
+            )
+        )
+        state.turn_count += 1
+        await self._repository.save(state)
+
+        return state, decision
+
+
+================================================
 FILE: app/services/ticket_analysis_service.py
 ================================================
 """
@@ -657,6 +1505,36 @@ class TicketAnalysisService:
             completeness_score=completeness.score,
             missing_or_uncertain_fields=completeness.missing_or_uncertain_fields,
         )
+
+
+================================================
+FILE: app/services/transcript_formatter.py
+================================================
+"""
+Formats a ConversationState's raw_messages into the single issue_text
+string Agent 1's existing extractor expects (it has no native concept of
+multi-turn dialogue - see ticket_analysis_service.py's analyze(issue_text)
+signature). Kept separate from clarification_service.py so this format
+can be unit-tested without touching any provider or repository.
+"""
+
+from app.schemas.conversation import Message
+
+
+def format_transcript_for_extraction(raw_messages: list[Message]) -> str:
+    """
+    Labels each message by speaker so Agent 1's extractor doesn't mistake
+    Agent 2's own clarifying questions for user-reported symptoms.
+    """
+    lines = []
+    for msg in raw_messages:
+        if msg.role == "user":
+            lines.append(f"User: {msg.content}")
+        elif msg.role == "assistant":
+            lines.append(f"Assistant asked: {msg.content}")
+        else:
+            lines.append(f"System: {msg.content}")
+    return "\n".join(lines)
 
 
 ================================================
@@ -2953,6 +3831,378 @@ FILE: data/eval/wifi_internet.json
 
 
 ================================================
+FILE: frontend/app.js
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8d in position 8034: character maps to <undefined>
+
+
+================================================
+FILE: frontend/index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VIT IT Service Desk â€” TRO Assistant</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="header-left">
+        <div class="header-title">VIT IT Service Desk</div>
+        <div class="header-subtitle">TRO Assistant Â· Pre-Submission Ticket Readiness</div>
+      </div>
+      <div class="header-right">
+        <span id="statusDot" class="status-dot" title="Backend status"></span>
+        <span id="statusLabel" class="status-label">checkingâ€¦</span>
+        <button id="newChatBtn" class="btn-ghost" title="Start a new conversation">â†º New Chat</button>
+      </div>
+    </header>
+
+    <main class="chat-shell">
+      <!-- Welcome / empty state -->
+      <section id="welcomeState" class="welcome-state">
+        <div class="welcome-icon">ðŸ’¬</div>
+        <h1>How can we help you today?</h1>
+        <p>Describe your issue in your own words, or pick a category to get started.</p>
+
+        <div id="categoryChips" class="chip-row"></div>
+
+        <div class="welcome-input">
+          <textarea id="welcomeInput" rows="2" placeholder="e.g. My wifi keeps dropping every few minutesâ€¦"></textarea>
+          <button id="welcomeSendBtn" class="btn-primary">Start</button>
+        </div>
+      </section>
+
+      <!-- Active chat -->
+      <section id="chatState" class="chat-state hidden">
+        <div id="turnBadge" class="turn-badge">Turn 0</div>
+        <div id="messages" class="messages"></div>
+
+        <div id="quickReplies" class="chip-row quick-replies hidden"></div>
+
+        <div id="completionCard" class="completion-card hidden"></div>
+
+        <form id="composerForm" class="composer">
+          <input
+            id="composerInput"
+            type="text"
+            autocomplete="off"
+            placeholder="Type your replyâ€¦"
+          />
+          <button type="submit" id="composerSendBtn" class="btn-primary">Send</button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
+
+================================================
+FILE: frontend/style.css
+================================================
+:root {
+  --indigo-900: #1e2a5e;
+  --indigo-700: #2c3e8c;
+  --indigo-600: #3752b4;
+  --indigo-500: #4a63d6;
+  --bg: #eef1f8;
+  --card-bg: #ffffff;
+  --text-main: #1f2430;
+  --text-muted: #6b7280;
+  --border: #e2e5ee;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --radius: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-main);
+  min-height: 100vh;
+}
+
+.app {
+  max-width: 820px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* Header */
+.app-header {
+  background: linear-gradient(135deg, var(--indigo-900), var(--indigo-600));
+  color: white;
+  padding: 16px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+}
+
+.header-title { font-weight: 700; font-size: 17px; }
+.header-subtitle { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+
+.header-right { display: flex; align-items: center; gap: 8px; }
+
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #f59e0b;
+  display: inline-block;
+}
+.status-dot.online { background: #22c55e; }
+.status-dot.offline { background: #ef4444; }
+.status-label { font-size: 12px; opacity: 0.85; margin-right: 8px; }
+
+.btn-ghost {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-ghost:hover { background: rgba(255,255,255,0.22); }
+
+/* Shell */
+.chat-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 16px;
+}
+
+.hidden { display: none !important; }
+
+/* Welcome */
+.welcome-state {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 40px 28px;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(30,42,94,0.06);
+}
+.welcome-icon { font-size: 40px; margin-bottom: 8px; }
+.welcome-state h1 { font-size: 22px; margin: 4px 0; }
+.welcome-state p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+.chip {
+  background: #eef1fb;
+  border: 1px solid var(--border);
+  color: var(--indigo-700);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chip:hover { background: #dde3fb; }
+
+.welcome-input {
+  display: flex;
+  gap: 10px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+.welcome-input textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+/* Chat state */
+.chat-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+.turn-badge {
+  align-self: flex-start;
+  background: #dde3fb;
+  color: var(--indigo-700);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+}
+
+.msg-row { display: flex; }
+.msg-row.user { justify-content: flex-end; }
+.msg-row.assistant, .msg-row.system { justify-content: flex-start; }
+
+.bubble {
+  max-width: 78%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.45;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.bubble.user {
+  background: var(--indigo-600);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+.bubble.assistant {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.bubble.system {
+  background: #fff7ed;
+  border: 1px solid #fde3b0;
+  color: #92400e;
+  font-style: italic;
+}
+.bubble.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: var(--danger);
+}
+
+.reasoning-toggle {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--indigo-500);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.reasoning-panel {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: #f5f6fb;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.reasoning-panel .tag {
+  display: inline-block;
+  background: #e5e9fb;
+  color: var(--indigo-700);
+  border-radius: 6px;
+  padding: 1px 6px;
+  margin: 2px 4px 0 0;
+  font-size: 11px;
+}
+
+.typing-bubble {
+  display: inline-flex;
+  gap: 4px;
+  padding: 12px 16px;
+}
+.typing-bubble span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-muted);
+  animation: blink 1.2s infinite ease-in-out;
+}
+.typing-bubble span:nth-child(2) { animation-delay: 0.2s; }
+.typing-bubble span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+
+.quick-replies { justify-content: flex-start; }
+
+.composer {
+  display: flex;
+  gap: 10px;
+  background: var(--card-bg);
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.composer input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  padding: 8px 10px;
+}
+
+.btn-primary {
+  background: var(--indigo-600);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover { background: var(--indigo-700); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Completion cards */
+.completion-card {
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: 0 4px 16px rgba(30,42,94,0.08);
+}
+.completion-card.ready {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+.completion-card.escalated {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+}
+.completion-card h3 { margin: 0 0 6px 0; font-size: 16px; }
+.completion-card .row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #d1d5db;
+}
+.completion-card .row:last-of-type { border-bottom: none; }
+.completion-card .row span:first-child { color: var(--text-muted); }
+.completion-card .row span:last-child { font-weight: 600; }
+
+@media (max-width: 480px) {
+  .chat-shell { padding: 12px; }
+  .bubble { max-width: 90%; }
+}
+
+
+================================================
 FILE: results/agent1_eval_results.csv
 ================================================
 ticket_id,expected_category,predicted_category,category_correct,completeness_level_expected,completeness_score_predicted,completeness_bucket_match,missing_fields_expected,missing_fields_predicted,error
@@ -3110,6 +4360,395 @@ PRN-030,printer_support,printer_support,True,partial,0.4583,True,printer_model;w
 
 
 ================================================
+FILE: results/calibration_summary.md
+================================================
+# Agent 1 confidence calibration â€” Metric 6
+n = 149 tickets (rows with a returned category and confidence)
+Expected Calibration Error (ECE): **0.097**
+Brier score: **0.125**
+
+Lower is better for both. This is a single run on 150 synthetic tickets - report it as a directional first check, not a final calibration claim, consistent with how the rest of the evaluation suite is reported.
+
+| Confidence bin | n | Mean confidence | Observed accuracy | Gap |
+|---|---|---|---|---|
+| (-0.001, 0.2] | 2 | 0.000 | 0.000 | +0.000 |
+| (0.4, 0.6] | 3 | 0.533 | 0.333 | -0.200 |
+| (0.6, 0.8] | 4 | 0.788 | 1.000 | +0.212 |
+| (0.8, 1.0] | 140 | 0.957 | 0.864 | -0.093 |
+
+
+================================================
+FILE: results/category_classifier_cv_report.md
+================================================
+# Lightweight trained fallback classifier â€” proof of concept
+
+TF-IDF (1-2 grams) + HistGradientBoostingClassifier, 5-fold stratified CV
+
+n = 150 tickets, 5 categories
+
+Cross-validated accuracy: **0.767**
+
+The pipeline uses TF-IDF text features followed by a sparse-to-dense conversion because HistGradientBoostingClassifier requires dense input.
+
+This is a separate, classically-trained model â€” not a fine-tuned version of the Gemini or Groq LLMs used elsewhere in the pipeline. It is a first step toward the XLNet/HGB fallback item on the research roadmap, evaluated honestly on a small (150-example) synthetic set â€” a proof-of-concept, not a production-ready model.
+
+## Classification Report
+
+```
+                     precision    recall  f1-score   support
+
+ad_account_creation       0.74      0.68      0.71        34
+           ms_teams       0.87      0.87      0.87        30
+    printer_support       0.83      0.70      0.76        27
+          vit_email       0.67      0.79      0.72        33
+      wifi_internet       0.78      0.81      0.79        26
+
+           accuracy                           0.77       150
+          macro avg       0.78      0.77      0.77       150
+       weighted avg       0.77      0.77      0.77       150
+
+```
+
+## Confusion Matrix
+
+Rows = true labels, columns = predicted labels.
+
+```
+                     ad_account_creation  ms_teams  printer_support  vit_email  wifi_internet
+ad_account_creation                   23         2                1          7              1
+ms_teams                               1        26                1          2              0
+printer_support                        2         0               19          2              4
+vit_email                              4         2                0         26              1
+wifi_internet                          1         0                2          2             21
+```
+
+
+================================================
+FILE: results/confidence_calibration_raw.csv
+================================================
+ticket_id,expected_category,predicted_category,category_confidence,category_correct,mean_field_confidence,num_fields_extracted,error
+WIFI-001,wifi_internet,wifi_internet,0.95,True,,0,
+WIFI-002,wifi_internet,wifi_internet,1.0,True,0.9666666666666667,3,
+WIFI-003,wifi_internet,wifi_internet,0.99,True,0.95,4,
+WIFI-004,ad_account_creation,wifi_internet,0.95,False,0.9,1,
+WIFI-005,wifi_internet,wifi_internet,1.0,True,1.0,5,
+WIFI-006,wifi_internet,wifi_internet,0.9,True,,0,
+WIFI-007,wifi_internet,,,,,0,"Gemini returned an internally inconsistent field (e.g. a null value with nonzero confidence): 1 validation error for ExtractedField
+  Value error, Confidence must be 0 when extracted value is None [type=value_error, input_value={'value': None, 'confidence': 0.9}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.12/v/value_error"
+WIFI-008,wifi_internet,wifi_internet,1.0,True,0.9666666666666667,3,
+WIFI-009,wifi_internet,wifi_internet,0.95,True,0.8999999999999999,4,
+WIFI-010,wifi_internet,wifi_internet,1.0,True,0.9666666666666667,3,
+WIFI-011,wifi_internet,wifi_internet,0.99,True,0.946,5,
+WIFI-012,vit_email,wifi_internet,0.5,False,0.9,2,
+WIFI-013,wifi_internet,wifi_internet,1.0,True,1.0,1,
+WIFI-014,wifi_internet,wifi_internet,1.0,True,0.975,4,
+WIFI-015,wifi_internet,wifi_internet,1.0,True,0.9800000000000001,5,
+WIFI-016,wifi_internet,wifi_internet,1.0,True,0.9875,4,
+WIFI-017,wifi_internet,wifi_internet,0.95,True,0.9125,4,
+WIFI-018,wifi_internet,wifi_internet,0.99,True,0.9125,4,
+WIFI-019,wifi_internet,wifi_internet,0.9,True,1.0,1,
+WIFI-020,ms_teams,ms_teams,0.95,True,0.9,1,
+WIFI-021,wifi_internet,wifi_internet,1.0,True,1.0,5,
+WIFI-022,wifi_internet,wifi_internet,0.95,True,0.95,5,
+WIFI-023,wifi_internet,wifi_internet,0.99,True,0.95,5,
+WIFI-024,wifi_internet,wifi_internet,0.95,True,0.925,2,
+WIFI-025,ad_account_creation,wifi_internet,0.99,False,0.9333333333333332,3,
+WIFI-026,wifi_internet,wifi_internet,0.95,True,0.9,2,
+WIFI-027,wifi_internet,wifi_internet,0.95,True,0.9333333333333332,3,
+WIFI-028,vit_email,wifi_internet,0.6,False,0.9,1,
+WIFI-029,wifi_internet,,0.0,False,,0,
+WIFI-030,wifi_internet,wifi_internet,0.95,True,0.9299999999999999,5,
+TEAMS-001,ms_teams,ms_teams,0.95,True,1.0,1,
+TEAMS-002,ms_teams,ms_teams,1.0,True,0.975,2,
+TEAMS-003,ms_teams,ms_teams,1.0,True,0.975,4,
+TEAMS-004,vit_email,ms_teams,0.95,False,0.925,2,
+TEAMS-005,ms_teams,ms_teams,1.0,True,1.0,4,
+TEAMS-006,ms_teams,ms_teams,1.0,True,0.95,2,
+TEAMS-007,ms_teams,ms_teams,0.9,True,0.9,1,
+TEAMS-008,ms_teams,ms_teams,1.0,True,0.975,4,
+TEAMS-009,ms_teams,ms_teams,0.95,True,0.875,2,
+TEAMS-010,ms_teams,ms_teams,0.95,True,0.8500000000000001,2,
+TEAMS-011,ms_teams,ms_teams,1.0,True,1.0,2,
+TEAMS-012,ms_teams,ms_teams,0.95,True,0.95,1,
+TEAMS-013,,ms_teams,0.99,False,0.95,2,
+TEAMS-014,ms_teams,ms_teams,0.95,True,0.9499999999999998,3,
+TEAMS-015,ms_teams,ms_teams,0.95,True,0.8500000000000001,2,
+TEAMS-016,ms_teams,ms_teams,0.9,True,1.0,1,
+TEAMS-017,ms_teams,ms_teams,1.0,True,1.0,3,
+TEAMS-018,ms_teams,ms_teams,0.95,True,0.95,2,
+TEAMS-019,ms_teams,ms_teams,0.95,True,0.925,2,
+TEAMS-020,,ms_teams,1.0,False,0.95,2,
+TEAMS-021,ms_teams,ms_teams,0.95,True,0.9333333333333332,3,
+TEAMS-022,ms_teams,ms_teams,0.95,True,0.95,1,
+TEAMS-023,vit_email,ms_teams,1.0,False,1.0,1,
+TEAMS-024,ms_teams,ms_teams,1.0,True,1.0,3,
+TEAMS-025,ms_teams,ms_teams,0.85,True,0.95,1,
+TEAMS-026,ms_teams,ms_teams,1.0,True,,0,
+TEAMS-027,ms_teams,ms_teams,0.99,True,0.9499999999999998,3,
+TEAMS-028,vit_email,ms_teams,0.95,False,0.9,1,
+TEAMS-029,ms_teams,ms_teams,0.95,True,0.9,2,
+TEAMS-030,ms_teams,ms_teams,1.0,True,1.0,2,
+EMAIL-001,vit_email,vit_email,0.95,True,0.95,1,
+EMAIL-002,vit_email,vit_email,0.95,True,0.9166666666666666,3,
+EMAIL-003,vit_email,vit_email,0.95,True,0.9499999999999998,3,
+EMAIL-004,,vit_email,0.95,False,0.925,2,
+EMAIL-005,vit_email,vit_email,0.9,True,0.875,4,
+EMAIL-006,vit_email,vit_email,0.95,True,0.875,2,
+EMAIL-007,vit_email,vit_email,0.95,True,0.925,2,
+EMAIL-008,vit_email,vit_email,0.99,True,0.9480000000000001,5,
+EMAIL-009,vit_email,vit_email,0.95,True,0.9,2,
+EMAIL-010,vit_email,vit_email,0.95,True,0.9,1,
+EMAIL-011,vit_email,vit_email,0.95,True,0.9166666666666666,3,
+EMAIL-012,vit_email,vit_email,0.95,True,0.8833333333333333,3,
+EMAIL-013,ms_teams,vit_email,0.95,False,0.9,1,
+EMAIL-014,vit_email,vit_email,0.95,True,0.9333333333333332,3,
+EMAIL-015,vit_email,vit_email,0.95,True,0.95,1,
+EMAIL-016,vit_email,vit_email,0.8,True,,0,
+EMAIL-017,vit_email,vit_email,0.85,True,0.9466666666666667,3,
+EMAIL-018,vit_email,vit_email,0.95,True,0.8999999999999999,2,
+EMAIL-019,vit_email,vit_email,0.95,True,0.9333333333333332,3,
+EMAIL-020,,vit_email,0.95,False,0.99,1,
+EMAIL-021,vit_email,vit_email,0.95,True,0.925,2,
+EMAIL-022,vit_email,vit_email,0.95,True,0.925,2,
+EMAIL-023,ms_teams,vit_email,0.9,False,0.95,1,
+EMAIL-024,vit_email,vit_email,0.95,True,0.9475,4,
+EMAIL-025,vit_email,vit_email,0.95,True,0.9,1,
+EMAIL-026,vit_email,vit_email,0.95,True,0.9,1,
+EMAIL-027,vit_email,vit_email,0.95,True,0.9375,4,
+EMAIL-028,,vit_email,0.95,False,1.0,1,
+EMAIL-029,vit_email,vit_email,0.95,True,0.925,2,
+EMAIL-030,vit_email,vit_email,0.95,True,0.925,2,
+ADA-001,ad_account_creation,ad_account_creation,0.75,True,0.95,1,
+ADA-002,ad_account_creation,ad_account_creation,0.95,True,0.8875,4,
+ADA-003,,vit_email,0.95,False,0.9249999999999999,4,
+ADA-004,ad_account_creation,ad_account_creation,0.95,True,0.95,1,
+ADA-005,ad_account_creation,ad_account_creation,0.95,True,0.9,1,
+ADA-006,ad_account_creation,ad_account_creation,0.9,True,1.0,4,
+ADA-007,ad_account_creation,ad_account_creation,0.95,True,0.9,1,
+ADA-008,ms_teams,ms_teams,0.95,True,0.925,2,
+ADA-009,ad_account_creation,ad_account_creation,0.85,True,0.95,2,
+ADA-010,ad_account_creation,ad_account_creation,0.85,True,1.0,3,
+ADA-011,ad_account_creation,ad_account_creation,0.85,True,0.95,1,
+ADA-012,ad_account_creation,ad_account_creation,0.8,True,0.95,1,
+ADA-013,,vit_email,0.95,False,0.9500000000000001,3,
+ADA-014,ad_account_creation,ad_account_creation,1.0,True,0.9400000000000001,5,
+ADA-015,ad_account_creation,ad_account_creation,0.5,True,0.95,1,
+ADA-016,ad_account_creation,ad_account_creation,0.95,True,,0,
+ADA-017,ad_account_creation,ad_account_creation,1.0,True,1.0,3,
+ADA-018,ad_account_creation,ad_account_creation,0.95,True,0.95,2,
+ADA-019,ad_account_creation,wifi_internet,0.9,False,,0,
+ADA-020,ad_account_creation,ad_account_creation,0.95,True,0.9374999999999999,4,
+ADA-021,ms_teams,ms_teams,0.95,True,0.925,2,
+ADA-022,ad_account_creation,ad_account_creation,0.9,True,,0,
+ADA-023,ad_account_creation,vit_email,0.85,False,0.95,2,
+ADA-024,ad_account_creation,ad_account_creation,0.95,True,0.8500000000000001,2,
+ADA-025,ad_account_creation,ad_account_creation,0.85,True,0.925,2,
+ADA-026,ad_account_creation,ad_account_creation,1.0,True,0.9333333333333332,3,
+ADA-027,ad_account_creation,ad_account_creation,0.9,True,1.0,4,
+ADA-028,ad_account_creation,,0.0,False,,0,
+ADA-029,,vit_email,0.95,False,0.9125000000000001,4,
+ADA-030,ad_account_creation,ad_account_creation,0.8,True,0.95,1,
+PRN-001,printer_support,printer_support,0.95,True,0.9,1,
+PRN-002,printer_support,printer_support,1.0,True,1.0,7,
+PRN-003,printer_support,printer_support,1.0,True,1.0,4,
+PRN-004,printer_support,printer_support,0.95,True,0.95,2,
+PRN-005,printer_support,printer_support,1.0,True,0.96,5,
+PRN-006,printer_support,printer_support,0.99,True,0.9374999999999999,4,
+PRN-007,printer_support,printer_support,0.95,True,0.925,2,
+PRN-008,ad_account_creation,printer_support,0.95,False,0.925,2,
+PRN-009,printer_support,printer_support,1.0,True,0.9666666666666667,3,
+PRN-010,printer_support,printer_support,0.95,True,0.9333333333333332,3,
+PRN-011,printer_support,printer_support,0.95,True,0.9299999999999999,5,
+PRN-012,printer_support,printer_support,0.99,True,0.96,3,
+PRN-013,printer_support,printer_support,1.0,True,0.96,5,
+PRN-014,printer_support,printer_support,0.95,True,0.9166666666666666,3,
+PRN-015,printer_support,printer_support,0.95,True,0.95,1,
+PRN-016,printer_support,printer_support,1.0,True,1.0,6,
+PRN-017,printer_support,printer_support,0.95,True,0.9333333333333332,3,
+PRN-018,printer_support,printer_support,1.0,True,1.0,2,
+PRN-019,printer_support,printer_support,1.0,True,0.9249999999999999,6,
+PRN-020,printer_support,printer_support,1.0,True,1.0,2,
+PRN-021,printer_support,printer_support,1.0,True,1.0,6,
+PRN-022,printer_support,printer_support,0.95,True,0.875,2,
+PRN-023,wifi_internet,wifi_internet,0.9,True,0.875,5,
+PRN-024,printer_support,printer_support,0.95,True,0.9333333333333332,3,
+PRN-025,printer_support,printer_support,0.95,True,,0,
+PRN-026,printer_support,printer_support,1.0,True,1.0,5,
+PRN-027,printer_support,printer_support,0.95,True,0.95,1,
+PRN-028,printer_support,printer_support,1.0,True,0.9833333333333334,6,
+PRN-029,ad_account_creation,printer_support,0.95,False,0.9333333333333332,3,
+PRN-030,printer_support,printer_support,1.0,True,1.0,3,
+
+
+
+================================================
+FILE: scripts/analyze_calibration.py
+================================================
+"""
+Confidence calibration analysis (Metric 6).
+
+Reads results/confidence_calibration_raw.csv (produced by
+run_confidence_calibration_eval.py) and checks whether Agent 1's
+self-reported category confidence is actually calibrated - i.e.
+whether tickets the model calls "0.85 confidence" are correct
+roughly 85% of the time.
+
+No API calls here - pure offline analysis, safe to re-run as many
+times as needed while iterating on the prompt.
+
+Run from the project root: python scripts/analyze_calibration.py
+
+Outputs:
+    results/calibration_reliability_diagram.png
+    results/calibration_summary.md
+
+Requires: pip install matplotlib pandas numpy
+"""
+
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
+INPUT_PATH = RESULTS_DIR / "confidence_calibration_raw.csv"
+PNG_PATH = RESULTS_DIR / "calibration_reliability_diagram.png"
+SUMMARY_PATH = RESULTS_DIR / "calibration_summary.md"
+
+N_BINS = 5  # coarse bins - 150 tickets doesn't reliably support finer bins
+
+
+def load_clean(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    before = len(df)
+    df = df.dropna(subset=["category_confidence", "category_correct"])
+    df["category_correct"] = df["category_correct"].astype(bool)
+    dropped = before - len(df)
+    if dropped:
+        print(f"Dropped {dropped} rows with errors/missing confidence.")
+    return df
+
+
+def compute_calibration(df: pd.DataFrame, n_bins: int = N_BINS) -> pd.DataFrame:
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    df = df.copy()
+    df["bin"] = pd.cut(df["category_confidence"], bins=bins, include_lowest=True)
+
+    grouped = (
+        df.groupby("bin", observed=True)
+        .agg(
+            count=("category_correct", "size"),
+            mean_confidence=("category_confidence", "mean"),
+            accuracy=("category_correct", "mean"),
+        )
+        .reset_index()
+    )
+    return grouped
+
+
+def expected_calibration_error(grouped: pd.DataFrame, total_n: int) -> float:
+    ece = 0.0
+    for _, row in grouped.iterrows():
+        if pd.isna(row["mean_confidence"]):
+            continue
+        weight = row["count"] / total_n
+        ece += weight * abs(row["accuracy"] - row["mean_confidence"])
+    return ece
+
+
+def brier_score(df: pd.DataFrame) -> float:
+    return float(np.mean((df["category_confidence"] - df["category_correct"].astype(float)) ** 2))
+
+
+def plot_reliability_diagram(grouped: pd.DataFrame, ece: float, brier: float, out_path: Path):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Perfect calibration")
+
+    valid = grouped.dropna(subset=["mean_confidence", "accuracy"])
+    ax.plot(
+        valid["mean_confidence"], valid["accuracy"],
+        marker="o", color="#3C3489", label="Agent 1 (observed)",
+    )
+    for _, row in valid.iterrows():
+        ax.annotate(
+            f"n={int(row['count'])}",
+            (row["mean_confidence"], row["accuracy"]),
+            textcoords="offset points", xytext=(6, -6), fontsize=8,
+        )
+
+    ax.set_xlabel("Self-reported category confidence")
+    ax.set_ylabel("Observed accuracy")
+    ax.set_title(f"Agent 1 confidence calibration\nECE = {ece:.3f}, Brier score = {brier:.3f}")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    print(f"Reliability diagram saved to {out_path}")
+
+
+def write_summary(grouped: pd.DataFrame, ece: float, brier: float, n: int, out_path: Path):
+    lines = [
+        "# Agent 1 confidence calibration â€” Metric 6",
+        f"n = {n} tickets (rows with a returned category and confidence)",
+        f"Expected Calibration Error (ECE): **{ece:.3f}**",
+        f"Brier score: **{brier:.3f}**",
+        "",
+        "Lower is better for both. This is a single run on 150 synthetic "
+        "tickets - report it as a directional first check, not a final "
+        "calibration claim, consistent with how the rest of the evaluation "
+        "suite is reported.",
+        "",
+        "| Confidence bin | n | Mean confidence | Observed accuracy | Gap |",
+        "|---|---|---|---|---|",
+    ]
+    for _, row in grouped.iterrows():
+        if pd.isna(row["mean_confidence"]):
+            continue
+        gap = row["accuracy"] - row["mean_confidence"]
+        lines.append(
+            f"| {row['bin']} | {int(row['count'])} | {row['mean_confidence']:.3f} "
+            f"| {row['accuracy']:.3f} | {gap:+.3f} |"
+        )
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Summary written to {out_path}")
+
+
+def main():
+    if not INPUT_PATH.exists():
+        print(f"ERROR: {INPUT_PATH} not found.")
+        print("Run scripts/run_confidence_calibration_eval.py first.")
+        sys.exit(1)
+
+    df = load_clean(INPUT_PATH)
+    if df.empty:
+        print("No usable rows after cleaning - nothing to analyze.")
+        sys.exit(1)
+
+    grouped = compute_calibration(df)
+    ece = expected_calibration_error(grouped, len(df))
+    brier = brier_score(df)
+
+    print(grouped.to_string(index=False))
+    print(f"\nECE = {ece:.3f}")
+    print(f"Brier score = {brier:.3f}")
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    plot_reliability_diagram(grouped, ece, brier, PNG_PATH)
+    write_summary(grouped, ece, brier, len(df), SUMMARY_PATH)
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
 FILE: scripts/run_agent1_eval.py
 ================================================
 """
@@ -3138,7 +4777,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.agents.information_extractor import InformationExtractor
 from app.config.category_profiles import normalize_category_label
-from app.core.settings import settings
+from app.config.settings import settings
 from app.providers.exceptions import LLMProviderError
 from app.providers.gemini_provider import GeminiProvider
 from app.services.ticket_analysis_service import TicketAnalysisService
@@ -3331,6 +4970,716 @@ def print_summary(results: list[dict]):
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+================================================
+FILE: scripts/run_agent2_eval.py
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 3794: character maps to <undefined>
+
+
+================================================
+FILE: scripts/run_agent2_scenarios.py
+================================================
+"""
+Runs the 8 behavioral scenarios (digest.txt Section 20) against the REAL,
+locked Groq-backed AdaptiveClarifier. Not part of pytest - live-model,
+non-deterministic, and deliberately excluded from CI (see M5.8 design note).
+
+Run from the project root: python -m scripts.run_agent2_scenarios
+
+Prints a full transcript per scenario plus the lightweight automated check
+result, and saves the same to a markdown file for the report (M5.11).
+"""
+
+import asyncio
+from datetime import datetime, timezone
+
+from app.agents.adaptive_clarifier import AdaptiveClarifier
+from app.config.settings import settings
+from app.providers.groq_clarification_provider import GroqClarificationProvider
+from tests.eval.agent2_scenarios import ALL_SCENARIOS
+
+OUTPUT_PATH = "tests/eval/results_latest.md"
+
+
+async def main():
+    provider = GroqClarificationProvider(api_key=settings.groq_api_key, model=settings.groq_model)
+    agent = AdaptiveClarifier(provider=provider, max_turns=settings.max_clarification_turns)
+
+    report_lines = [
+        f"# Agent 2 Behavioral Scenario Results",
+        f"Run: {datetime.now(timezone.utc).isoformat()}",
+        f"Model: {settings.groq_model}",
+        "",
+    ]
+
+    pass_count = 0
+    manual_review_count = 0
+    fail_count = 0
+
+    for scenario in ALL_SCENARIOS:
+        print(f"\n{'=' * 70}\n{scenario.id}: {scenario.description}\n{'=' * 70}")
+        decision = await agent.decide(scenario.state)
+        passed, note = scenario.check(decision)
+
+        if passed is True:
+            status = "PASS"
+            pass_count += 1
+        elif passed is False:
+            status = "FAIL"
+            fail_count += 1
+        else:
+            status = "MANUAL REVIEW"
+            manual_review_count += 1
+
+        print(f"Action: {decision.action}")
+        if decision.question:
+            print(f"Question: {decision.question}")
+        print(f"Reasoning: {decision.reasoning}")
+        print(f"Affected fields: {decision.affected_fields}")
+        print(f"Expected info gain: {decision.expected_information_gain} | Confidence: {decision.confidence}")
+        print(f"--> {status}: {note}")
+
+        report_lines += [
+            f"## {scenario.id}",
+            f"**Description:** {scenario.description}",
+            f"**Status:** {status}",
+            f"**Note:** {note}",
+            "",
+            f"- Action: `{decision.action}`",
+            f"- Question: {decision.question or '(none)'}",
+            f"- Reasoning: {decision.reasoning}",
+            f"- Affected fields: {decision.affected_fields}",
+            f"- Expected information gain: {decision.expected_information_gain}",
+            f"- Confidence: {decision.confidence}",
+            "",
+        ]
+
+    summary = (
+        f"\n{'=' * 70}\nSUMMARY: {pass_count} passed, "
+        f"{manual_review_count} need manual review, {fail_count} failed "
+        f"(out of {len(ALL_SCENARIOS)})\n{'=' * 70}"
+    )
+    print(summary)
+    report_lines.insert(3, summary.strip() + "\n")
+
+    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines))
+    print(f"\nFull report saved to {OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+================================================
+FILE: scripts/run_confidence_calibration_eval.py
+================================================
+"""
+Real-API evaluation run that captures raw confidence values (not just
+completeness score) needed for confidence calibration (Metric 6).
+
+This is a companion to run_agent1_eval.py, not a replacement - that
+script measures category/completeness accuracy; this one captures the
+confidence numbers themselves so analyze_calibration.py can check
+whether "confidence: 0.85" actually means "correct 85% of the time."
+
+Costs real Gemini API calls. Run manually from the project root:
+    python scripts/run_confidence_calibration_eval.py
+
+Rate-limited the same way as run_agent1_eval.py (free-tier RPM safety).
+~150 tickets * 4.5s = ~11-12 minutes total.
+"""
+
+import asyncio
+import csv
+import json
+import logging
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.agents.information_extractor import InformationExtractor
+from app.config.category_profiles import normalize_category_label
+from app.config.settings import settings
+from app.providers.exceptions import LLMProviderError
+from app.providers.gemini_provider import GeminiProvider
+
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+logging.getLogger("google_genai.types").setLevel(logging.ERROR)
+
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "eval"
+RESULTS_PATH = Path(__file__).resolve().parent.parent / "results" / "confidence_calibration_raw.csv"
+
+DATASET_FILES = [
+    "wifi_internet.json",
+    "ms_teams.json",
+    "vit_email.json",
+    "ad_account_creation.json",
+    "printer_support.json",
+]
+
+SECONDS_BETWEEN_CALLS = 4.5
+
+
+def load_all_tickets() -> list[dict]:
+    tickets = []
+    for filename in DATASET_FILES:
+        path = DATA_DIR / filename
+        if not path.exists():
+            print(f"WARNING: {path} not found, skipping.")
+            continue
+        with open(path, encoding="utf-8") as f:
+            tickets.extend(json.load(f))
+    return tickets
+
+
+def build_input_text(ticket: dict) -> str:
+    parts = [f"Subject: {ticket['subject']}", ticket["message"]]
+    if ticket.get("ocr_text"):
+        parts.append(f"[Screenshot text: {ticket['ocr_text']}]")
+    return "\n".join(parts)
+
+
+async def evaluate_ticket(extractor: InformationExtractor, ticket: dict, max_retries: int = 2) -> dict:
+    input_text = build_input_text(ticket)
+    expected_category = normalize_category_label(ticket["true_category"])
+
+    error = None
+    result = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = await extractor.extract(input_text)
+            error = None
+            break
+        except LLMProviderError as exc:
+            error = str(exc)
+            if "429" in error and attempt < max_retries:
+                wait = 10 * (attempt + 1)
+                print(f"    -> 429 hit, retrying in {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            break
+
+    if result is not None:
+        predicted_category = result.category.value
+        category_confidence = result.category.confidence
+        category_correct = predicted_category == expected_category
+
+        field_confidences = [
+            f.confidence for f in result.extracted_fields.values() if f.value is not None
+        ]
+        mean_field_confidence = (
+            sum(field_confidences) / len(field_confidences) if field_confidences else None
+        )
+    else:
+        predicted_category = None
+        category_confidence = None
+        category_correct = None
+        mean_field_confidence = None
+
+    return {
+        "ticket_id": ticket["ticket_id"],
+        "expected_category": expected_category,
+        "predicted_category": predicted_category,
+        "category_confidence": category_confidence,
+        "category_correct": category_correct,
+        "mean_field_confidence": mean_field_confidence,
+        "num_fields_extracted": len(result.extracted_fields) if result else 0,
+        "error": error,
+    }
+
+
+async def main():
+    tickets = load_all_tickets()
+    if not tickets:
+        print("No tickets loaded - check data/eval/ files exist.")
+        return
+
+    print(f"Loaded {len(tickets)} tickets. Capturing raw confidence for calibration analysis...")
+    est_minutes = len(tickets) * SECONDS_BETWEEN_CALLS / 60
+    print(f"Rate-limited to 1 call per {SECONDS_BETWEEN_CALLS}s (~{est_minutes:.1f} min total).\n")
+
+    provider = GeminiProvider(api_key=settings.gemini_api_key or "", model=settings.gemini_model)
+    extractor = InformationExtractor(provider)
+
+    results = []
+    for i, ticket in enumerate(tickets, start=1):
+        row = await evaluate_ticket(extractor, ticket)
+        results.append(row)
+        status = "ERROR" if row["error"] else ("OK" if row["category_correct"] else "MISS")
+        conf = f"{row['category_confidence']:.2f}" if row["category_confidence"] is not None else "n/a"
+        print(f"[{i}/{len(tickets)}] {row['ticket_id']} - {status} (conf={conf})")
+        if i < len(tickets):
+            await asyncio.sleep(SECONDS_BETWEEN_CALLS)
+
+    RESULTS_PATH.parent.mkdir(exist_ok=True)
+    with open(RESULTS_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=results[0].keys())
+        writer.writeheader()
+        writer.writerows(results)
+
+    print(f"\nRaw confidence data saved to {RESULTS_PATH}")
+    print("Next: python scripts/analyze_calibration.py")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+================================================
+FILE: scripts/smoke_test_adaptive_clarifier.py
+================================================
+"""
+Manual smoke test for AdaptiveClarifier's turn-budget safeguard.
+Run from the project root: python -m scripts.smoke_test_adaptive_clarifier
+
+Uses FakeClarificationProvider (scripted, deterministic) rather than the
+live Groq provider - the safeguard logic being tested here doesn't
+depend on what the model actually reasons, only on how the agent reacts
+to a given decision once the turn budget is exhausted. Testing this
+against a live model would make the test flaky for no benefit.
+"""
+
+import asyncio
+
+from app.agents.adaptive_clarifier import AdaptiveClarifier, was_forced_escalation
+from app.providers.fake_clarification_provider import FakeClarificationProvider
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState, Message
+
+MAX_TURNS = 3
+
+# The provider will "want" to keep asking, every time, regardless of state.
+scripted_decision = ClarificationDecision(
+    action="ASK_CLARIFICATION",
+    reasoning="Device platform is still unknown.",
+    information_gap="device_platform",
+    question="What device are you using?",
+    expected_information_gain=0.7,
+    affected_fields=["device_platform"],
+    priority="medium",
+    confidence=0.8,
+)
+
+
+async def run_at_turn(turn_count: int) -> None:
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(scripted_decision),
+        max_turns=MAX_TURNS,
+    )
+    state = ConversationState(
+        conversation_id=f"budget-test-turn-{turn_count}",
+        turn_count=turn_count,
+        raw_messages=[Message(role="user", content="My Teams isn't working.")],
+    )
+    decision = await agent.decide(state)
+    print(f"\nturn_count={turn_count} (max={MAX_TURNS}) -> action={decision.action}")
+    print(f"  forced_escalation={was_forced_escalation(decision)}")
+    print(f"  reasoning={decision.reasoning}")
+
+
+async def main():
+    # Below budget: provider's ASK_CLARIFICATION should pass through untouched.
+    await run_at_turn(turn_count=1)
+    await run_at_turn(turn_count=2)
+
+    # At/over budget: same scripted ASK_CLARIFICATION must be overridden to ESCALATE.
+    await run_at_turn(turn_count=3)
+    await run_at_turn(turn_count=4)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+================================================
+FILE: scripts/smoke_test_clarification_service.py
+================================================
+"""
+Manual end-to-end smoke test for ClarificationService.
+Run from the project root: python -m scripts.smoke_test_clarification_service
+
+Simulates a 2-3 turn conversation, using the REAL Gemini extractor and
+REAL Groq clarifier (not fakes) - this is the first test exercising the
+full Agent 1 -> Agent 2 -> persistence loop together. Costs real API
+calls (still free tier), so don't run this in a tight loop.
+"""
+
+import asyncio
+
+from app.agents.adaptive_clarifier import AdaptiveClarifier
+from app.agents.information_extractor import InformationExtractor  # adjust import if named differently
+from app.config.settings import settings
+from app.providers.gemini_provider import GeminiProvider
+from app.providers.groq_clarification_provider import GroqClarificationProvider
+from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
+from app.services.clarification_service import ClarificationService
+from app.services.ticket_analysis_service import TicketAnalysisService
+
+
+async def main():
+    gemini = GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
+    extractor = InformationExtractor(provider=gemini)  # adjust constructor if different
+    extraction_service = TicketAnalysisService(extractor=extractor)
+
+    groq_provider = GroqClarificationProvider(
+        api_key=settings.groq_api_key, model=settings.groq_model
+    )
+    clarifier = AdaptiveClarifier(
+        provider=groq_provider, max_turns=settings.max_clarification_turns
+    )
+
+    repository = InMemoryConversationRepository()
+    service = ClarificationService(extraction_service, clarifier, repository)
+
+    conversation_id = "e2e-smoke-1"
+    turns = [
+        "Teams isn't working.",
+        "Audio drops during meetings, happens to me and two other people in the same call.",
+        "I'm on Windows 11 desktop app, no error message shown.",
+    ]
+
+    for i, user_message in enumerate(turns, start=1):
+        print(f"\n{'=' * 60}\nTURN {i}: \"{user_message}\"\n{'=' * 60}")
+        state, decision = await service.handle_message(conversation_id, user_message)
+        print(f"Category: {state.detected_category}")
+        print(f"Completeness: {state.completeness_score}")
+        print(f"Decision: {decision.action}")
+        if decision.question:
+            print(f"Question: {decision.question}")
+        print(f"Reasoning: {decision.reasoning}")
+        print(f"Expected information gain: {decision.expected_information_gain}")
+        print(f"Confidence: {decision.confidence}")
+
+        if decision.action in ("READY", "ESCALATE"):
+            print(f"\nConversation terminated at turn {i} with action={decision.action}.")
+            break
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+================================================
+FILE: scripts/smoke_test_groq_provider.py
+================================================
+Error reading file with 'cp1252': 'charmap' codec can't decode byte 0x8f in position 2633: character maps to <undefined>
+
+
+================================================
+FILE: scripts/train_category_classifier.py
+================================================
+"""
+Lightweight trained fallback classifier - proof-of-concept for the
+"XLNet/HGB phased fallback" item on the research roadmap (Sravani et
+al. precedent), brought forward from "post-graduation future work" to
+something evaluated tonight.
+
+NOT the same thing as fine-tuning Gemini or the Groq-hosted model -
+neither supports customer fine-tuning on the free tier (Gemini's free
+tier explicitly excludes fine-tuning; Groq only serves inference on
+open-weight models, no customer fine-tuning). This trains a small,
+separate, classically-trained classifier (TF-IDF features +
+Histogram Gradient Boosting) on the existing 150-ticket synthetic set
+instead - a legitimate "training technique" answer, honestly scoped as
+a proof-of-concept on a small dataset, not a production model.
+
+Runs entirely on CPU in seconds - no GPU, no large model download.
+
+Run from the project root:
+    python scripts/train_category_classifier.py
+
+Requires:
+    pip install scikit-learn pandas numpy
+"""
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer
+
+
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "eval"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
+
+DATASET_FILES = [
+    "wifi_internet.json",
+    "ms_teams.json",
+    "vit_email.json",
+    "ad_account_creation.json",
+    "printer_support.json",
+]
+
+# Known dataset labeling-drift fixes.
+LABEL_FIX = {
+    "AD Account Support": "AD Account Creation",
+    "VIT Email": "VIT Email Support",
+}
+
+CATEGORY_DISPLAY_TO_KEY = {
+    "Wifi/Internet Support": "wifi_internet",
+    "Microsoft Teams Support": "ms_teams",
+    "VIT Email Support": "vit_email",
+    "AD Account Creation": "ad_account_creation",
+    "Printer Support": "printer_support",
+}
+
+
+def load_all_tickets() -> list[dict]:
+    """Load tickets from all configured evaluation datasets."""
+    tickets = []
+
+    for filename in DATASET_FILES:
+        path = DATA_DIR / filename
+
+        if not path.exists():
+            print(f"WARNING: {path} not found, skipping.")
+            continue
+
+        with open(path, encoding="utf-8") as f:
+            tickets.extend(json.load(f))
+
+    return tickets
+
+
+def build_input_text(ticket: dict) -> str:
+    """Combine ticket fields into the text used by the classifier."""
+    parts = [
+        ticket["subject"],
+        ticket["message"],
+    ]
+
+    if ticket.get("ocr_text"):
+        parts.append(ticket["ocr_text"])
+
+    return " ".join(parts)
+
+
+def normalize_label(raw: str) -> str | None:
+    """Normalize dataset labels into the classifier's category keys."""
+    fixed = LABEL_FIX.get(raw, raw)
+    return CATEGORY_DISPLAY_TO_KEY.get(fixed)
+
+
+def main():
+    # ------------------------------------------------------------------
+    # 1. Load dataset
+    # ------------------------------------------------------------------
+    tickets = load_all_tickets()
+
+    if not tickets:
+        print("No tickets loaded - check data/eval/ files exist.")
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 2. Prepare training rows
+    # ------------------------------------------------------------------
+    rows = []
+    skipped = 0
+
+    for ticket in tickets:
+        label = normalize_label(ticket["true_category"])
+
+        if label is None:
+            skipped += 1
+            continue
+
+        rows.append(
+            {
+                "text": build_input_text(ticket),
+                "label": label,
+                "ticket_id": ticket["ticket_id"],
+            }
+        )
+
+    if skipped:
+        print(
+            f"Skipped {skipped} tickets with unrecognized "
+            f"true_category labels."
+        )
+
+    df = pd.DataFrame(rows)
+
+    print(
+        f"Training set: {len(df)} tickets across "
+        f"{df['label'].nunique()} categories"
+    )
+
+    print(df["label"].value_counts().to_string())
+
+    # ------------------------------------------------------------------
+    # 3. Build TF-IDF + HGB pipeline
+    #
+    # TF-IDF produces a sparse matrix.
+    # HistGradientBoostingClassifier requires dense input.
+    #
+    # Therefore:
+    #
+    # TF-IDF -> sparse matrix -> dense conversion -> HGB
+    # ------------------------------------------------------------------
+    pipeline = Pipeline(
+        [
+            (
+                "tfidf",
+                TfidfVectorizer(
+                    min_df=1,
+                    ngram_range=(1, 2),
+                    sublinear_tf=True,
+                ),
+            ),
+            (
+                "to_dense",
+                FunctionTransformer(
+                    lambda x: x.toarray(),
+                    accept_sparse=True,
+                ),
+            ),
+            (
+                "clf",
+                HistGradientBoostingClassifier(
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Stratified 5-fold cross-validation
+    # ------------------------------------------------------------------
+    n_splits = 5
+
+    skf = StratifiedKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=42,
+    )
+
+    print("\nRunning cross-validation...")
+
+    y_pred = cross_val_predict(
+        pipeline,
+        df["text"],
+        df["label"],
+        cv=skf,
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Accuracy
+    # ------------------------------------------------------------------
+    accuracy = float(np.mean(y_pred == df["label"]))
+
+    print(
+        f"\n{n_splits}-fold cross-validated accuracy: "
+        f"{accuracy:.3f}"
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Classification report
+    # ------------------------------------------------------------------
+    print("\nClassification report:")
+
+    report = classification_report(
+        df["label"],
+        y_pred,
+        zero_division=0,
+    )
+
+    print(report)
+
+    # ------------------------------------------------------------------
+    # 7. Confusion matrix
+    # ------------------------------------------------------------------
+    labels_sorted = sorted(df["label"].unique())
+
+    cm = confusion_matrix(
+        df["label"],
+        y_pred,
+        labels=labels_sorted,
+    )
+
+    cm_df = pd.DataFrame(
+        cm,
+        index=labels_sorted,
+        columns=labels_sorted,
+    )
+
+    print("Confusion matrix (rows=true, cols=predicted):")
+    print(cm_df.to_string())
+
+    # ------------------------------------------------------------------
+    # 8. Save evaluation report
+    # ------------------------------------------------------------------
+    RESULTS_DIR.mkdir(exist_ok=True)
+
+    out_path = RESULTS_DIR / "category_classifier_cv_report.md"
+
+    lines = [
+        "# Lightweight trained fallback classifier â€” proof of concept",
+        "",
+        (
+            f"TF-IDF (1-2 grams) + HistGradientBoostingClassifier, "
+            f"{n_splits}-fold stratified CV"
+        ),
+        "",
+        (
+            f"n = {len(df)} tickets, "
+            f"{df['label'].nunique()} categories"
+        ),
+        "",
+        f"Cross-validated accuracy: **{accuracy:.3f}**",
+        "",
+        (
+            "The pipeline uses TF-IDF text features followed by a "
+            "sparse-to-dense conversion because "
+            "HistGradientBoostingClassifier requires dense input."
+        ),
+        "",
+        (
+            "This is a separate, classically-trained model â€” not a "
+            "fine-tuned version of the Gemini or Groq LLMs used "
+            "elsewhere in the pipeline. It is a first step toward "
+            "the XLNet/HGB fallback item on the research roadmap, "
+            "evaluated honestly on a small (150-example) synthetic "
+            "set â€” a proof-of-concept, not a production-ready model."
+        ),
+        "",
+        "## Classification Report",
+        "",
+        "```",
+        report,
+        "```",
+        "",
+        "## Confusion Matrix",
+        "",
+        "Rows = true labels, columns = predicted labels.",
+        "",
+        "```",
+        cm_df.to_string(),
+        "```",
+    ]
+
+    out_path.write_text(
+        "\n".join(lines),
+        encoding="utf-8",
+    )
+
+    print(f"\nReport saved to {out_path}")
+
+
+if __name__ == "__main__":
+    main()
 
 
 ================================================
@@ -4134,4 +6483,1111 @@ async def test_ms_teams_and_vit_email_score_consistently_for_same_pattern():
     teams_result = await make_service(teams_canned).analyze("Teams message.")
     email_result = await make_service(email_canned).analyze("Email message.")
     assert teams_result.completeness_score == email_result.completeness_score
+
+
+================================================
+FILE: tests/eval/agent2_scenarios.py
+================================================
+"""
+The 8 required behavioral test scenarios for Agent 2 (digest.txt Section 20).
+
+Each scenario is a hand-built ConversationState (as if Agent 1 already ran)
+paired with a check function. Checks return (passed, note):
+  - passed=True/False: an automated, mechanical check succeeded/failed
+  - passed=None: no reliable automated check exists: this scenario needs
+    a human to read the decision and judge it (e.g. "is this a good
+    question?" isn't something a keyword match can verify)
+
+Run via: python -m scripts.run_agent2_scenarios
+"""
+
+from dataclasses import dataclass
+from typing import Callable
+
+from app.schemas.clarification import ClarificationDecision, ClarificationLogEntry
+from app.schemas.conversation import ConversationState, Message
+from app.schemas.extraction import CategoryPrediction, ExtractedField
+
+CheckResult = tuple[bool | None, str]
+CheckFn = Callable[[ClarificationDecision], CheckResult]
+
+
+@dataclass
+class Scenario:
+    id: str
+    description: str
+    state: ConversationState
+    check: CheckFn
+
+
+# --- Scenario 1: one question resolves multiple gaps ---
+
+def _check_scenario_1(d: ClarificationDecision) -> CheckResult:
+    if d.action != "ASK_CLARIFICATION":
+        return False, f"Expected ASK_CLARIFICATION, got {d.action}"
+    if "scope" in d.affected_fields:
+        return False, "Re-asked about scope, which was already resolved"
+    if len(d.affected_fields) < 2:
+        return None, (
+            f"Only targeted {d.affected_fields} - didn't combine multiple gaps "
+            "into one question. Not automatically wrong, but check manually "
+            "whether a combined question was actually possible here."
+        )
+    return True, f"Asked one question covering {d.affected_fields}, did not re-ask scope"
+
+
+scenario_1 = Scenario(
+    id="one_question_multiple_gaps",
+    description="Teams audio failure affecting multiple users - scope already known",
+    state=ConversationState(
+        conversation_id="eval-1",
+        turn_count=1,
+        raw_messages=[
+            Message(
+                role="user",
+                content="Teams audio stopped during my class and two classmates have the same problem.",
+            ),
+        ],
+        extracted_fields={
+            "failure_type": ExtractedField(value="audio", confidence=0.85),
+            "scope": ExtractedField(value="multiple users", confidence=0.8),
+        },
+        detected_category=CategoryPrediction(value="ms_teams", confidence=0.9),
+        completeness_score=0.55,
+        missing_or_uncertain_fields=["error_signal", "device_platform"],
+    ),
+    check=_check_scenario_1,
+)
+
+
+# --- Scenario 2: READY despite incomplete profile fields ---
+
+def _check_scenario_2(d: ClarificationDecision) -> CheckResult:
+    if d.action == "READY":
+        return True, "Correctly judged ticket actionable despite incomplete fields"
+    return None, (
+        f"Returned {d.action} instead of READY. digest.txt's own Example D "
+        "asserts READY here, but this is an illustrative example, not a "
+        "labeled ground truth - read decision.reasoning and judge whether "
+        "the remaining gap is genuinely load-bearing before calling this wrong."
+    )
+
+
+scenario_2 = Scenario(
+    id="ready_despite_incomplete_fields",
+    description="Teams camera fails, isolated to Teams (works in Zoom) - device_platform/scope unresolved",
+    state=ConversationState(
+        conversation_id="eval-2",
+        turn_count=1,
+        raw_messages=[
+            Message(
+                role="user",
+                content="My Teams camera isn't working. It works in Zoom but not Teams.",
+            ),
+        ],
+        extracted_fields={
+            "failure_type": ExtractedField(value="camera", confidence=0.9),
+            "error_signal": ExtractedField(
+                value="isolated to Teams app, works fine in Zoom", confidence=0.85
+            ),
+        },
+        detected_category=CategoryPrediction(value="ms_teams", confidence=0.9),
+        completeness_score=0.45,
+        missing_or_uncertain_fields=["scope", "device_platform"],
+    ),
+    check=_check_scenario_2,
+)
+
+
+# --- Scenario 3: avoid repetition ---
+
+def _check_scenario_3(d: ClarificationDecision) -> CheckResult:
+    if "device_platform" in d.affected_fields:
+        return False, "Re-asked about device_platform despite it being answered last turn"
+    return True, f"Did not re-ask device_platform; moved to {d.affected_fields}"
+
+
+scenario_3 = Scenario(
+    id="avoid_repetition",
+    description="Device platform already answered in prior turn's Q&A, in different wording",
+    state=ConversationState(
+        conversation_id="eval-3",
+        turn_count=2,
+        raw_messages=[
+            Message(role="user", content="Teams keeps crashing."),
+            Message(
+                role="assistant",
+                content="Are you using the Teams desktop app or the browser version?",
+            ),
+            Message(role="user", content="Desktop app on Windows."),
+        ],
+        extracted_fields={
+            "failure_type": ExtractedField(value="crashing", confidence=0.85),
+            "device_platform": ExtractedField(value="Windows desktop app", confidence=0.9),
+        },
+        detected_category=CategoryPrediction(value="ms_teams", confidence=0.9),
+        completeness_score=0.6,
+        missing_or_uncertain_fields=["scope", "error_signal"],
+        clarification_log=[
+            ClarificationLogEntry(
+                turn=0,
+                user_message="Teams keeps crashing.",
+                decision=ClarificationDecision(
+                    action="ASK_CLARIFICATION",
+                    reasoning="Device platform unknown.",
+                    information_gap="device_platform",
+                    question="Are you using the Teams desktop app or the browser version?",
+                    expected_information_gain=0.7,
+                    affected_fields=["device_platform"],
+                    priority="high",
+                    confidence=0.8,
+                ),
+            ),
+        ],
+    ),
+    check=_check_scenario_3,
+)
+
+
+# --- Scenario 4: contradiction detection ---
+
+def _check_scenario_4(d: ClarificationDecision) -> CheckResult:
+    if d.action == "RECHECK":
+        return True, "Correctly flagged contradiction as RECHECK"
+    return None, (
+        f"Returned {d.action} instead of RECHECK. The transcript contains a "
+        "clear contradiction (single device -> multiple devices) - read "
+        "reasoning to check whether the model at least noticed the "
+        "conflict, even if it chose a different action label for it."
+    )
+
+
+scenario_4 = Scenario(
+    id="contradiction_detection",
+    description="User says 'only my laptop', then later 'my phone too' - state now shows multiple",
+    state=ConversationState(
+        conversation_id="eval-4",
+        turn_count=2,
+        raw_messages=[
+            Message(role="user", content="Only my laptop has the WiFi problem."),
+            Message(role="assistant", content="When did this start happening?"),
+            Message(role="user", content="Actually my phone can't connect either, started today."),
+        ],
+        extracted_fields={
+            "symptom_type": ExtractedField(value="can't connect", confidence=0.85),
+            "single_or_multiple_devices": ExtractedField(value="multiple", confidence=0.8),
+            "when_started": ExtractedField(value="today", confidence=0.9),
+        },
+        detected_category=CategoryPrediction(value="wifi_internet", confidence=0.9),
+        completeness_score=0.7,
+        missing_or_uncertain_fields=["device_type", "ssid"],
+        clarification_log=[
+            ClarificationLogEntry(
+                turn=0,
+                user_message="Only my laptop has the WiFi problem.",
+                decision=ClarificationDecision(
+                    action="ASK_CLARIFICATION",
+                    reasoning="Need to know when this started.",
+                    information_gap="when_started",
+                    question="When did this start happening?",
+                    expected_information_gain=0.6,
+                    affected_fields=["when_started"],
+                    priority="medium",
+                    confidence=0.75,
+                ),
+            ),
+        ],
+    ),
+    check=_check_scenario_4,
+)
+
+
+# --- Scenario 5: ambiguous category ---
+
+def _check_scenario_5(d: ClarificationDecision) -> CheckResult:
+    if d.action != "ASK_CLARIFICATION":
+        return None, f"Returned {d.action} - check whether escalating/proceeding without a category is reasonable here"
+    if not d.question:
+        return False, "ASK_CLARIFICATION but no question provided"
+    return True, "Asked a clarifying question with category undetermined"
+
+
+scenario_5 = Scenario(
+    id="ambiguous_category",
+    description="Category could not be determined - vague message with no category-defining signal",
+    state=ConversationState(
+        conversation_id="eval-5",
+        turn_count=1,
+        raw_messages=[Message(role="user", content="Nothing is working today, please help.")],
+        extracted_fields={},
+        detected_category=CategoryPrediction(value=None, confidence=0.0),
+        completeness_score=0.0,
+        missing_or_uncertain_fields=["symptom_or_error", "when_started", "scope"],
+    ),
+    check=_check_scenario_5,
+)
+
+
+# --- Scenario 6: high completeness but critical ambiguity remains ---
+
+def _check_scenario_6(d: ClarificationDecision) -> CheckResult:
+    if d.action == "ASK_CLARIFICATION":
+        return True, "Correctly asked despite high completeness score"
+    return None, (
+        f"Returned {d.action} with completeness=0.85 - check reasoning to see "
+        "if it explicitly engaged with the ambiguity (conflicting symptom "
+        "descriptions) or just deferred to the high score."
+    )
+
+
+scenario_6 = Scenario(
+    id="high_completeness_critical_ambiguity",
+    description="AD account ticket: fields resolved, but symptom description is internally contradictory",
+    state=ConversationState(
+        conversation_id="eval-6",
+        turn_count=1,
+        raw_messages=[
+            Message(
+                role="user",
+                content=(
+                    "My AD account was created but I can log in with the old "
+                    "password, though it says my account doesn't exist yet."
+                ),
+            ),
+        ],
+        extracted_fields={
+            "error_or_symptom": ExtractedField(
+                value="can log in with old password but account doesn't exist", confidence=0.7
+            ),
+            "username_domain": ExtractedField(value="provided", confidence=0.85),
+            "when_started": ExtractedField(value="today", confidence=0.9),
+            "device_context": ExtractedField(value="campus PC", confidence=0.8),
+        },
+        detected_category=CategoryPrediction(value="ad_account_creation", confidence=0.85),
+        completeness_score=0.85,
+        missing_or_uncertain_fields=["troubleshooting_done"],
+    ),
+    check=_check_scenario_6,
+)
+
+
+# --- Scenario 7: low completeness but actionable ---
+
+def _check_scenario_7(d: ClarificationDecision) -> CheckResult:
+    if d.action == "READY":
+        return True, "Correctly judged actionable despite low completeness score"
+    return None, (
+        f"Returned {d.action} with completeness=0.4. Read reasoning: does it "
+        "engage with why the specific detail given (paper jam, one printer) "
+        "is or isn't enough to route, or does it default to the low score?"
+    )
+
+
+scenario_7 = Scenario(
+    id="low_completeness_actionable",
+    description="Printer jam, single printer, specific and unambiguous despite few fields resolved",
+    state=ConversationState(
+        conversation_id="eval-7",
+        turn_count=1,
+        raw_messages=[
+            Message(
+                role="user",
+                content="The printer on the 3rd floor near the library entrance has a paper jam.",
+            ),
+        ],
+        extracted_fields={
+            "symptom": ExtractedField(value="paper jam", confidence=0.95),
+            "scope": ExtractedField(value="one printer, 3rd floor", confidence=0.85),
+        },
+        detected_category=CategoryPrediction(value="printer_support", confidence=0.9),
+        completeness_score=0.4,
+        missing_or_uncertain_fields=[
+            "error_message", "connection_type", "printer_model", "when_started", "troubleshooting_done"
+        ],
+    ),
+    check=_check_scenario_7,
+)
+
+
+# --- Scenario 8: clarification budget - conservatism near the limit ---
+
+def _check_scenario_8(d: ClarificationDecision) -> CheckResult:
+    if d.action in ("READY", "ESCALATE"):
+        return True, f"Chose {d.action} at the last available turn rather than asking again"
+    return None, (
+        f"Chose ASK_CLARIFICATION at turn_count=max_turns-1 (last turn before "
+        "the safeguard would force ESCALATE). Check reasoning: does it argue "
+        "this specific question is high-value enough to justify the last "
+        "turn, per the prompt's 'weigh the cost of another turn more "
+        "heavily' instruction? Note: if it does ask, AdaptiveClarifier's "
+        "safeguard will force ESCALATE next turn regardless - this scenario "
+        "tests the model's own judgment approaching the limit, not the "
+        "safeguard itself (that's already covered in M5.8 unit tests)."
+    )
+
+
+scenario_8 = Scenario(
+    id="turn_budget_conservatism",
+    description="One turn remaining before budget-forced escalation - still one field unresolved",
+    state=ConversationState(
+        conversation_id="eval-8",
+        turn_count=2,  # max_turns=3 -> this is the last turn before forced escalation
+        raw_messages=[
+            Message(role="user", content="My VIT email won't send attachments."),
+            Message(role="assistant", content="What's the error message you see?"),
+            Message(role="user", content="It just says 'failed to send', no other details."),
+        ],
+        extracted_fields={
+            "failure_type": ExtractedField(value="can't send attachments", confidence=0.85),
+            "error_signal": ExtractedField(value="failed to send", confidence=0.6),
+        },
+        detected_category=CategoryPrediction(value="vit_email", confidence=0.9),
+        completeness_score=0.5,
+        missing_or_uncertain_fields=["scope", "device_platform"],
+        clarification_log=[
+            ClarificationLogEntry(
+                turn=0,
+                user_message="My VIT email won't send attachments.",
+                decision=ClarificationDecision(
+                    action="ASK_CLARIFICATION",
+                    reasoning="Need error detail.",
+                    information_gap="error_signal",
+                    question="What's the error message you see?",
+                    expected_information_gain=0.7,
+                    affected_fields=["error_signal"],
+                    priority="high",
+                    confidence=0.8,
+                ),
+            ),
+        ],
+    ),
+    check=_check_scenario_8,
+)
+
+
+ALL_SCENARIOS: list[Scenario] = [
+    scenario_1, scenario_2, scenario_3, scenario_4,
+    scenario_5, scenario_6, scenario_7, scenario_8,
+]
+
+
+================================================
+FILE: tests/eval/dimension_map.py
+================================================
+"""
+Maps each of Section 25's 8 evaluation dimensions to the scenario(s) that
+provide evidence for it. Some dimensions have no fixture coverage yet -
+these are reported as NOT YET MEASURABLE rather than given a fabricated
+score (see turn_efficiency below).
+"""
+
+DIMENSION_MAP: dict[str, list[str]] = {
+    "question_quality": ["one_question_multiple_gaps", "ambiguous_category"],
+    "redundancy": ["one_question_multiple_gaps", "avoid_repetition"],
+    "information_gain": ["one_question_multiple_gaps", "turn_budget_conservatism"],
+    "turn_efficiency": [],  # not measurable from single-shot fixtures - needs a
+                            # multi-turn oracle comparison (MAS2S-style); none
+                            # of the 8 scenarios test this by design
+    "readiness_quality": [
+        "ready_despite_incomplete_fields",
+        "high_completeness_critical_ambiguity",
+        "low_completeness_actionable",
+    ],
+    "over_questioning": [
+        "high_completeness_critical_ambiguity",  # correctly did NOT over-ask
+        "low_completeness_actionable",           # did over-ask
+    ],
+    "adaptation": ["avoid_repetition", "contradiction_detection"],
+    "contradiction_handling": ["contradiction_detection"],
+}
+
+
+================================================
+FILE: tests/eval/dimension_scores_latest.md
+================================================
+# Agent 2 Dimension Scores (M5.10)
+Run: 2026-08-31T05:12:14.838907+00:00
+Model: openai/gpt-oss-20b
+## Summary
+
+| Dimension | Score |
+|---|---|
+| Question Quality | 0.75 / 1.00 |
+| Redundancy | 0.75 / 1.00 |
+| Information Gain | 0.50 / 1.00 |
+| Turn Efficiency | NOT MEASURABLE |
+| Readiness Quality | 0.67 / 1.00 |
+| Over Questioning | 0.50 / 1.00 |
+| Adaptation | 0.50 / 1.00 |
+| Contradiction Handling | 0.00 / 1.00 |
+
+
+## Question Quality
+- `one_question_multiple_gaps`: **PARTIAL** â€” No human verdict recorded yet. Automated note: Only targeted ['device_platform'] - didn't combine multiple gaps into one question. Not automatically wrong, but check manually whether a combined question was actually possible here.
+- `ambiguous_category`: **PASS** â€” Asked a clarifying question with category undetermined
+
+**Score: 0.75 / 1.00** (avg over 2 scenario(s))
+
+## Redundancy
+- `one_question_multiple_gaps`: **PARTIAL** â€” No human verdict recorded yet. Automated note: Only targeted ['device_platform'] - didn't combine multiple gaps into one question. Not automatically wrong, but check manually whether a combined question was actually possible here.
+- `avoid_repetition`: **PASS** â€” Did not re-ask device_platform; moved to ['error_signal']
+
+**Score: 0.75 / 1.00** (avg over 2 scenario(s))
+
+## Information Gain
+- `one_question_multiple_gaps`: **PARTIAL** â€” No human verdict recorded yet. Automated note: Only targeted ['device_platform'] - didn't combine multiple gaps into one question. Not automatically wrong, but check manually whether a combined question was actually possible here.
+- `turn_budget_conservatism`: **PARTIAL** â€” Action itself is reasonable (one combined question, not wasteful). But reasoning never references the turn budget or the approaching limit at all - reads identically to a turn-1 decision. The prompt's explicit 'weigh the cost of another turn more heavily near the budget' instruction is not demonstrably applied here, even though the outcome happens to be fine.
+
+**Score: 0.50 / 1.00** (avg over 2 scenario(s))
+
+## Turn Efficiency
+**NOT YET MEASURABLE** - no fixture coverage. Requires a multi-turn oracle comparison, not a single-shot scenario. See M5.6 end-to-end smoke test for a qualitative 3-turn example in the meantime.
+
+## Readiness Quality
+- `ready_despite_incomplete_fields`: **PASS** â€” Returned ASK_CLARIFICATION rather than the spec's illustrative READY. Reasoning explicitly ties device_platform to differing troubleshooting paths (a real diagnostic claim, not a filler justification) - defensible disagreement with digest.txt's Example D, not a bug. digest.txt's example is illustrative, not labeled ground truth.
+- `high_completeness_critical_ambiguity`: **PASS** â€” Correctly asked despite high completeness score
+- `low_completeness_actionable`: **FAIL** â€” Asked for printer_model to fix a paper jam at a located, specific printer. Justification ('essential for precise troubleshooting instructions') is thinner than comparable scenario 2's reasoning - reads as field-weight-driven rather than a genuine diagnostic argument, since clearing a jam doesn't typically require the model number. Assessed as genuine over-questioning, not a defensible judgment call.
+
+**Score: 0.67 / 1.00** (avg over 3 scenario(s))
+
+## Over Questioning
+- `high_completeness_critical_ambiguity`: **PASS** â€” Correctly asked despite high completeness score
+- `low_completeness_actionable`: **FAIL** â€” Asked for printer_model to fix a paper jam at a located, specific printer. Justification ('essential for precise troubleshooting instructions') is thinner than comparable scenario 2's reasoning - reads as field-weight-driven rather than a genuine diagnostic argument, since clearing a jam doesn't typically require the model number. Assessed as genuine over-questioning, not a defensible judgment call.
+
+**Score: 0.50 / 1.00** (avg over 2 scenario(s))
+
+## Adaptation
+- `avoid_repetition`: **PASS** â€” Did not re-ask device_platform; moved to ['error_signal']
+- `contradiction_detection`: **FAIL** â€” Reasoning never references the single->multiple device contradiction at all; treats 'multiple' as settled fact and moves to an unrelated question (SSID). Root cause is architectural, not a prompt wording issue: Agent 1 re-extracts fresh from the full transcript every turn, so Agent 2 only ever sees the latest, already-reconciled snapshot - it never observes the conflict as a conflict. RECHECK may be largely unreachable under the current re-extraction design. Documented as a known architectural limitation, not something to prompt-tune around.
+
+**Score: 0.50 / 1.00** (avg over 2 scenario(s))
+
+## Contradiction Handling
+- `contradiction_detection`: **FAIL** â€” Reasoning never references the single->multiple device contradiction at all; treats 'multiple' as settled fact and moves to an unrelated question (SSID). Root cause is architectural, not a prompt wording issue: Agent 1 re-extracts fresh from the full transcript every turn, so Agent 2 only ever sees the latest, already-reconciled snapshot - it never observes the conflict as a conflict. RECHECK may be largely unreachable under the current re-extraction design. Documented as a known architectural limitation, not something to prompt-tune around.
+
+**Score: 0.00 / 1.00** (avg over 1 scenario(s))
+
+
+
+================================================
+FILE: tests/eval/human_verdicts.py
+================================================
+"""
+Human-reviewed verdicts for scenarios where automated checks alone can't
+judge quality (digest.txt Section 20's "manual review" cases - e.g. "was
+this a good question?" isn't a keyword match). Each entry records the
+verdict, the reasoning behind it, and the model action it was reviewed
+against - so a future re-run can detect if the model's behavior has
+drifted and the verdict may be stale.
+
+Update this file after each fresh run_agent2_scenarios.py execution if
+manual review is needed again - do not treat these as permanent labels.
+"""
+
+from dataclasses import dataclass
+from typing import Literal
+
+Verdict = Literal["PASS", "PARTIAL", "FAIL"]
+
+
+@dataclass
+class HumanVerdict:
+    verdict: Verdict
+    note: str
+    reviewed_against_action: str  # the decision.action this verdict was based on
+
+
+HUMAN_VERDICTS: dict[str, HumanVerdict] = {
+    "ready_despite_incomplete_fields": HumanVerdict(
+        verdict="PASS",
+        note=(
+            "Returned ASK_CLARIFICATION rather than the spec's illustrative "
+            "READY. Reasoning explicitly ties device_platform to differing "
+            "troubleshooting paths (a real diagnostic claim, not a filler "
+            "justification) - defensible disagreement with digest.txt's "
+            "Example D, not a bug. digest.txt's example is illustrative, "
+            "not labeled ground truth."
+        ),
+        reviewed_against_action="ASK_CLARIFICATION",
+    ),
+    "contradiction_detection": HumanVerdict(
+        verdict="FAIL",
+        note=(
+            "Reasoning never references the single->multiple device "
+            "contradiction at all; treats 'multiple' as settled fact and "
+            "moves to an unrelated question (SSID). Root cause is "
+            "architectural, not a prompt wording issue: Agent 1 re-extracts "
+            "fresh from the full transcript every turn, so Agent 2 only "
+            "ever sees the latest, already-reconciled snapshot - it never "
+            "observes the conflict as a conflict. RECHECK may be largely "
+            "unreachable under the current re-extraction design. Documented "
+            "as a known architectural limitation, not something to prompt-"
+            "tune around."
+        ),
+        reviewed_against_action="ASK_CLARIFICATION",
+    ),
+    "low_completeness_actionable": HumanVerdict(
+        verdict="FAIL",
+        note=(
+            "Asked for printer_model to fix a paper jam at a located, "
+            "specific printer. Justification ('essential for precise "
+            "troubleshooting instructions') is thinner than comparable "
+            "scenario 2's reasoning - reads as field-weight-driven rather "
+            "than a genuine diagnostic argument, since clearing a jam "
+            "doesn't typically require the model number. Assessed as "
+            "genuine over-questioning, not a defensible judgment call."
+        ),
+        reviewed_against_action="ASK_CLARIFICATION",
+    ),
+    "turn_budget_conservatism": HumanVerdict(
+        verdict="PARTIAL",
+        note=(
+            "Action itself is reasonable (one combined question, not "
+            "wasteful). But reasoning never references the turn budget or "
+            "the approaching limit at all - reads identically to a turn-1 "
+            "decision. The prompt's explicit 'weigh the cost of another "
+            "turn more heavily near the budget' instruction is not "
+            "demonstrably applied here, even though the outcome happens "
+            "to be fine."
+        ),
+        reviewed_against_action="ASK_CLARIFICATION",
+    ),
+}
+
+
+================================================
+FILE: tests/eval/results_latest.md
+================================================
+# Agent 2 Behavioral Scenario Results
+Run: 2026-08-31T05:02:36.857019+00:00
+Model: openai/gpt-oss-20b
+======================================================================
+SUMMARY: 4 passed, 4 need manual review, 0 failed (out of 8)
+======================================================================
+
+
+## one_question_multiple_gaps
+**Description:** Teams audio failure affecting multiple users - scope already known
+**Status:** PASS
+**Note:** Asked one question covering ['error_signal', 'device_platform'], did not re-ask scope
+
+- Action: `ASK_CLARIFICATION`
+- Question: Which Teams client are you using (desktop app, web, or mobile), and did you see any error message or notification when the audio stopped?
+- Reasoning: The ticket lacks key information on the client platform and the error signal. Knowing the platform allows us to apply the correct troubleshooting steps, while any error message can pinpoint a specific issue. A single question that addresses both fields will efficiently gather the missing data and make the ticket actionable.
+- Affected fields: ['error_signal', 'device_platform']
+- Expected information gain: 0.7
+- Confidence: 0.9
+
+## ready_despite_incomplete_fields
+**Description:** Teams camera fails, isolated to Teams (works in Zoom) - device_platform/scope unresolved
+**Status:** MANUAL REVIEW
+**Note:** Returned ASK_CLARIFICATION instead of READY. digest.txt's own Example D asserts READY here, but this is an illustrative example, not a labeled ground truth - read decision.reasoning and judge whether the remaining gap is genuinely load-bearing before calling this wrong.
+
+- Action: `ASK_CLARIFICATION`
+- Question: Could you let me know which device and operating system youâ€™re using Teams on (e.g., Windows PC, MacBook, iPhone, etc.)?
+- Reasoning: The user has indicated the camera works in Zoom but not in Teams, so the issue is isolated to Teams. To determine the appropriate troubleshooting steps and support routing, we need to know the device platform. This information will help identify platformâ€‘specific solutions. No prior clarification has covered this, and the question is concise and likely to be answered readily. The expected information gain is moderate, and the turn budget allows for one clarification turn.
+- Affected fields: ['device_platform']
+- Expected information gain: 0.6
+- Confidence: 0.85
+
+## avoid_repetition
+**Description:** Device platform already answered in prior turn's Q&A, in different wording
+**Status:** PASS
+**Note:** Did not re-ask device_platform; moved to ['scope']
+
+- Action: `ASK_CLARIFICATION`
+- Question: Are the crashes happening for all users in your organization, or just for you?
+- Reasoning: The user has confirmed Teams crashes on the Windows desktop app. The only remaining highâ€‘weight fields are scope and error signal. Determining whether the issue is userâ€‘specific or organizationâ€‘wide directly influences routing (global update vs. userâ€‘level troubleshooting) and is the most valuable clarification we can obtain in the remaining turn.
+- Affected fields: ['scope']
+- Expected information gain: 0.8
+- Confidence: 0.9
+
+## contradiction_detection
+**Description:** User says 'only my laptop', then later 'my phone too' - state now shows multiple
+**Status:** MANUAL REVIEW
+**Note:** Returned ASK_CLARIFICATION instead of RECHECK. The transcript contains a clear contradiction (single device -> multiple devices) - read reasoning to check whether the model at least noticed the conflict, even if it chose a different action label for it.
+
+- Action: `ASK_CLARIFICATION`
+- Question: Which WiFi network (SSID) are you trying to connect to?
+- Reasoning: The user reported connectivity issues on multiple devices but did not specify the network name. Knowing the SSID would help determine if the problem is with the router, the specific network, or the devices.
+- Affected fields: ['ssid']
+- Expected information gain: 0.7
+- Confidence: 0.85
+
+## ambiguous_category
+**Description:** Category could not be determined - vague message with no category-defining signal
+**Status:** PASS
+**Note:** Asked a clarifying question with category undetermined
+
+- Action: `ASK_CLARIFICATION`
+- Question: Could you tell me what specific issue you're experiencing today?
+- Reasoning: The userâ€™s message is very vague, with no symptom, timing, or scope identified.  The symptom_or_error field is the most valuable for diagnosis and routing (weightâ€¯1.0).  Asking for a clear description of the issue will provide the critical missing data and allow the ticket to be triaged appropriately.
+- Affected fields: ['symptom_or_error']
+- Expected information gain: 0.9
+- Confidence: 0.95
+
+## high_completeness_critical_ambiguity
+**Description:** AD account ticket: fields resolved, but symptom description is internally contradictory
+**Status:** PASS
+**Note:** Correctly asked despite high completeness score
+
+- Action: `ASK_CLARIFICATION`
+- Question: Have you tried resetting your password or logging in from a different device to see if the issue persists?
+- Reasoning: The user reports being able to log in with the old password but the system says the account doesn't exist, which suggests a sync or activation issue. Knowing whether standard troubleshooting steps like password reset or using a different device have been attempted will help determine if the problem is with AD provisioning or local caching, and therefore guide the appropriate resolution path.
+- Affected fields: ['troubleshooting_done']
+- Expected information gain: 0.8
+- Confidence: 0.9
+
+## low_completeness_actionable
+**Description:** Printer jam, single printer, specific and unambiguous despite few fields resolved
+**Status:** MANUAL REVIEW
+**Note:** Returned ASK_CLARIFICATION with completeness=0.4. Read reasoning: does it engage with why the specific detail given (paper jam, one printer) is or isn't enough to route, or does it default to the low score?
+
+- Action: `ASK_CLARIFICATION`
+- Question: Could you let me know the model number of the printer on the 3rd floor near the library entrance?
+- Reasoning: The user has reported a paper jam and identified the location, but we lack the printer model, which is essential for precise troubleshooting instructions and proper routing. Asking for this information will help determine the correct service path and avoid generic guidance.
+- Affected fields: ['printer_model']
+- Expected information gain: 0.6
+- Confidence: 0.8
+
+## turn_budget_conservatism
+**Description:** One turn remaining before budget-forced escalation - still one field unresolved
+**Status:** MANUAL REVIEW
+**Note:** Chose ASK_CLARIFICATION at turn_count=max_turns-1 (last turn before the safeguard would force ESCALATE). Check reasoning: does it argue this specific question is high-value enough to justify the last turn, per the prompt's 'weigh the cost of another turn more heavily' instruction? Note: if it does ask, AdaptiveClarifier's safeguard will force ESCALATE next turn regardless - this scenario tests the model's own judgment approaching the limit, not the safeguard itself (that's already covered in M5.8 unit tests).
+
+- Action: `ASK_CLARIFICATION`
+- Question: Could you let me know what email client or device youâ€™re using, and the type or size of the attachments youâ€™re trying to send?
+- Reasoning: The failure type and error signal are already resolved, but we lack device platform and scope details, which are crucial for diagnosing attachment sending issues. Providing both in one question maximizes information gain and stays within the turn budget.
+- Affected fields: ['scope', 'device_platform']
+- Expected information gain: 0.8
+- Confidence: 0.9
+
+
+
+================================================
+FILE: tests/unit/test_adaptive_clarifier.py
+================================================
+"""
+Unit tests for AdaptiveClarifier's turn-budget safeguard.
+Uses FakeClarificationProvider - no live API calls, fully deterministic,
+and unaffected by any changes to the real system prompt.
+"""
+
+import pytest
+
+from app.agents.adaptive_clarifier import AdaptiveClarifier, was_forced_escalation
+from app.providers.fake_clarification_provider import FakeClarificationProvider
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState, Message
+
+MAX_TURNS = 3
+
+
+def _scripted_ask_decision() -> ClarificationDecision:
+    return ClarificationDecision(
+        action="ASK_CLARIFICATION",
+        reasoning="Device platform is still unknown.",
+        information_gap="device_platform",
+        question="What device are you using?",
+        expected_information_gain=0.7,
+        affected_fields=["device_platform"],
+        priority="medium",
+        confidence=0.8,
+    )
+
+
+def _make_state(turn_count: int) -> ConversationState:
+    return ConversationState(
+        conversation_id=f"test-{turn_count}",
+        turn_count=turn_count,
+        raw_messages=[Message(role="user", content="My Teams isn't working.")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_ask_passes_through_below_budget():
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(_scripted_ask_decision()),
+        max_turns=MAX_TURNS,
+    )
+    decision = await agent.decide(_make_state(turn_count=1))
+
+    assert decision.action == "ASK_CLARIFICATION"
+    assert not was_forced_escalation(decision)
+
+
+@pytest.mark.asyncio
+async def test_ask_forced_to_escalate_at_budget():
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(_scripted_ask_decision()),
+        max_turns=MAX_TURNS,
+    )
+    decision = await agent.decide(_make_state(turn_count=MAX_TURNS))
+
+    assert decision.action == "ESCALATE"
+    assert was_forced_escalation(decision)
+    assert "Device platform is still unknown." in decision.reasoning
+
+
+@pytest.mark.asyncio
+async def test_ask_stays_forced_past_budget():
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(_scripted_ask_decision()),
+        max_turns=MAX_TURNS,
+    )
+    decision = await agent.decide(_make_state(turn_count=MAX_TURNS + 1))
+
+    assert decision.action == "ESCALATE"
+    assert was_forced_escalation(decision)
+
+
+@pytest.mark.asyncio
+async def test_ready_passes_through_even_at_budget():
+    """
+    The safeguard must ONLY override ASK_CLARIFICATION. READY, RECHECK,
+    and genuine ESCALATE decisions from the model must never be touched,
+    even when the turn budget is exhausted.
+    """
+    ready_decision = ClarificationDecision(
+        action="READY",
+        reasoning="All required fields resolved.",
+        information_gap=None,
+        question=None,
+        expected_information_gain=0.0,
+        affected_fields=[],
+        priority="low",
+        confidence=0.95,
+    )
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(ready_decision),
+        max_turns=MAX_TURNS,
+    )
+    decision = await agent.decide(_make_state(turn_count=MAX_TURNS))
+
+    assert decision.action == "READY"
+    assert not was_forced_escalation(decision)
+
+
+@pytest.mark.asyncio
+async def test_recheck_passes_through_even_at_budget():
+    recheck_decision = ClarificationDecision(
+        action="RECHECK",
+        reasoning="User's latest message contradicts earlier extraction.",
+        information_gap=None,
+        question=None,
+        expected_information_gain=0.5,
+        affected_fields=["scope"],
+        priority="medium",
+        confidence=0.7,
+    )
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(recheck_decision),
+        max_turns=MAX_TURNS,
+    )
+    decision = await agent.decide(_make_state(turn_count=MAX_TURNS + 5))
+
+    assert decision.action == "RECHECK"
+    assert not was_forced_escalation(decision)
+
+
+@pytest.mark.asyncio
+async def test_genuine_escalate_not_double_tagged():
+    """
+    A genuine model-chosen ESCALATE (not forced by budget) must NOT be
+    mistaken for a forced escalation by was_forced_escalation - otherwise
+    eval code can't distinguish "the model gave up" from "we cut it off."
+    """
+    genuine_escalate = ClarificationDecision(
+        action="ESCALATE",
+        reasoning="User is refusing to provide any diagnostic detail.",
+        information_gap=None,
+        question=None,
+        expected_information_gain=0.0,
+        affected_fields=[],
+        priority="high",
+        confidence=0.85,
+    )
+    agent = AdaptiveClarifier(
+        provider=FakeClarificationProvider(genuine_escalate),
+        max_turns=MAX_TURNS,
+    )
+    decision = await agent.decide(_make_state(turn_count=1))
+
+    assert decision.action == "ESCALATE"
+    assert not was_forced_escalation(decision)
+
+
+================================================
+FILE: tests/unit/test_clarification_context.py
+================================================
+"""
+Unit tests for clarification_context.py's pure formatting functions.
+No LLM calls, no ConversationState mutation - just deterministic
+input -> output checks. Unaffected by prompt wording changes.
+"""
+
+from app.agents.clarification_context import (
+    classify_field_gaps,
+    format_clarification_history,
+)
+from app.schemas.clarification import ClarificationDecision, ClarificationLogEntry
+from app.schemas.extraction import ExtractedField
+
+
+def test_classify_field_gaps_splits_missing_vs_uncertain():
+    extracted = {
+        "failure_type": ExtractedField(value="audio", confidence=0.9),
+        "scope": ExtractedField(value="multiple users", confidence=0.3),  # low confidence
+        # error_signal, device_platform never extracted at all
+    }
+    never_extracted, uncertain = classify_field_gaps("ms_teams", extracted)
+
+    assert "scope" in uncertain
+    assert "failure_type" not in uncertain
+    assert "failure_type" not in never_extracted
+    assert set(never_extracted) == {"error_signal", "device_platform"}
+
+
+def test_classify_field_gaps_handles_null_value():
+    extracted = {
+        "failure_type": ExtractedField(value=None, confidence=0.0),
+    }
+    never_extracted, uncertain = classify_field_gaps("ms_teams", extracted)
+
+    # Present in the dict but null value -> uncertain, not never_extracted.
+    assert "failure_type" in uncertain
+    assert "failure_type" not in never_extracted
+
+
+def test_clarification_history_pairs_question_with_next_answer():
+    log = [
+        ClarificationLogEntry(
+            turn=0,
+            user_message="Teams isn't working.",
+            decision=ClarificationDecision(
+                action="ASK_CLARIFICATION",
+                reasoning="Scope unknown.",
+                information_gap="scope",
+                question="Is this happening to just you?",
+                expected_information_gain=0.7,
+                affected_fields=["scope"],
+                priority="high",
+                confidence=0.8,
+            ),
+        ),
+        ClarificationLogEntry(
+            turn=1,
+            user_message="No, two others too.",
+            decision=ClarificationDecision(
+                action="READY",
+                reasoning="Sufficient.",
+                information_gap=None,
+                question=None,
+                expected_information_gain=0.0,
+                affected_fields=[],
+                priority="low",
+                confidence=0.9,
+            ),
+        ),
+    ]
+    formatted = format_clarification_history(log)
+
+    assert "Is this happening to just you?" in formatted
+    assert "No, two others too." in formatted
+
+
+def test_clarification_history_empty_log():
+    formatted = format_clarification_history([])
+    assert "No clarification questions" in formatted
+
+
+================================================
+FILE: tests/unit/test_clarification_service.py
+================================================
+"""
+Unit tests for ClarificationService's orchestration loop.
+Both the extraction service and the clarifier are faked - this tests
+ONLY the service's own logic (message append, state refresh, log append,
+turn increment, persistence), not any model's actual judgment, and is
+unaffected by prompt wording changes.
+"""
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
+from app.schemas.analysis import AnalysisResult
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.extraction import CategoryPrediction, ExtractedField
+from app.services.clarification_service import ClarificationService
+
+
+def _make_analysis_result(completeness: float) -> AnalysisResult:
+    return AnalysisResult(
+        category=CategoryPrediction(value="ms_teams", confidence=0.9),
+        extracted_fields={"failure_type": ExtractedField(value="audio", confidence=0.9)},
+        completeness_score=completeness,
+        missing_or_uncertain_fields=["scope"],
+    )
+
+
+def _make_ask_decision() -> ClarificationDecision:
+    return ClarificationDecision(
+        action="ASK_CLARIFICATION",
+        reasoning="Scope unknown.",
+        information_gap="scope",
+        question="Is this happening to just you?",
+        expected_information_gain=0.7,
+        affected_fields=["scope"],
+        priority="high",
+        confidence=0.8,
+    )
+
+
+def _make_ready_decision() -> ClarificationDecision:
+    return ClarificationDecision(
+        action="READY",
+        reasoning="Sufficient.",
+        information_gap=None,
+        question=None,
+        expected_information_gain=0.0,
+        affected_fields=[],
+        priority="low",
+        confidence=0.9,
+    )
+
+
+@pytest.fixture
+def fake_extraction_service():
+    service = AsyncMock()
+    service.analyze.return_value = _make_analysis_result(completeness=0.5)
+    return service
+
+
+@pytest.fixture
+def fake_clarifier():
+    agent = AsyncMock()
+    agent.decide.return_value = _make_ask_decision()
+    return agent
+
+
+@pytest.fixture
+def repository():
+    return InMemoryConversationRepository()
+
+
+@pytest.mark.asyncio
+async def test_first_turn_creates_state_and_increments_turn(
+    fake_extraction_service, fake_clarifier, repository
+):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    state, decision = await service.handle_message("conv-1", "Teams isn't working.")
+
+    assert state.turn_count == 1
+    assert state.raw_messages[0].role == "user"
+    assert state.raw_messages[0].content == "Teams isn't working."
+    assert decision.action == "ASK_CLARIFICATION"
+
+
+@pytest.mark.asyncio
+async def test_extraction_refreshes_state_fields(
+    fake_extraction_service, fake_clarifier, repository
+):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    state, _ = await service.handle_message("conv-1", "Teams isn't working.")
+
+    assert state.completeness_score == 0.5
+    assert state.detected_category.value == "ms_teams"
+    assert "scope" in state.missing_or_uncertain_fields
+
+
+@pytest.mark.asyncio
+async def test_ask_clarification_question_appended_to_transcript(
+    fake_extraction_service, fake_clarifier, repository
+):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    state, decision = await service.handle_message("conv-1", "Teams isn't working.")
+
+    assert len(state.raw_messages) == 2
+    assert state.raw_messages[1].role == "assistant"
+    assert state.raw_messages[1].content == decision.question
+
+
+@pytest.mark.asyncio
+async def test_ready_does_not_append_assistant_message(
+    fake_extraction_service, fake_clarifier, repository
+):
+    fake_clarifier.decide.return_value = _make_ready_decision()
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    state, decision = await service.handle_message("conv-1", "Windows 11, no error.")
+
+    assert decision.action == "READY"
+    assert len(state.raw_messages) == 1  # only the user message, no question to append
+
+
+@pytest.mark.asyncio
+async def test_clarification_log_entry_recorded(
+    fake_extraction_service, fake_clarifier, repository
+):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    state, decision = await service.handle_message("conv-1", "Teams isn't working.")
+
+    assert len(state.clarification_log) == 1
+    log_entry = state.clarification_log[0]
+    assert log_entry.turn == 0  # logged BEFORE increment
+    assert log_entry.user_message == "Teams isn't working."
+    assert log_entry.decision.action == "ASK_CLARIFICATION"
+
+@pytest.mark.asyncio
+async def test_state_persists_across_calls(fake_extraction_service, fake_clarifier, repository):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    await service.handle_message("conv-1", "Teams isn't working.")
+    state_after_turn_2, _ = await service.handle_message("conv-1", "Just me, on Windows.")
+
+    assert state_after_turn_2.turn_count == 2
+    assert len(state_after_turn_2.raw_messages) == 4  # user, assistant, user, assistant
+    assert len(state_after_turn_2.clarification_log) == 2
+
+
+@pytest.mark.asyncio
+async def test_different_conversation_ids_are_isolated(
+    fake_extraction_service, fake_clarifier, repository
+):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    state_a, _ = await service.handle_message("conv-a", "Teams isn't working.")
+    state_b, _ = await service.handle_message("conv-b", "Printer is offline.")
+
+    assert state_a.turn_count == 1
+    assert state_b.turn_count == 1
+    assert state_a.conversation_id != state_b.conversation_id
+
+
+@pytest.mark.asyncio
+async def test_extraction_service_receives_labeled_transcript(
+    fake_extraction_service, fake_clarifier, repository
+):
+    """
+    Confirms the M5.6 transcript-formatting decision: Agent 1 must
+    receive a speaker-labeled transcript, not just the raw latest message,
+    so it re-extracts against the FULL conversation each turn.
+    """
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository)
+
+    await service.handle_message("conv-1", "Teams isn't working.")
+    await service.handle_message("conv-1", "Just me, on Windows.")
+
+    second_call_args = fake_extraction_service.analyze.call_args_list[1]
+    transcript_sent = second_call_args.args[0]
+
+    assert "User: Teams isn't working." in transcript_sent
+    assert "Assistant asked:" in transcript_sent
+    assert "User: Just me, on Windows." in transcript_sent
 
