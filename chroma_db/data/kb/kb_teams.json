@@ -1,0 +1,51 @@
+[
+{
+    "kb_id": "KB0401",
+    "category": "Microsoft Teams Support",
+    "title": "Teams stuck on sign-in spinner after correct password entry",
+    "symptoms": "Teams desktop app loops on a loading/spinner screen after login, never reaches the main interface",
+    "resolution": "1. Fully sign out and clear the Teams cache folder before relaunching\n2. Update Teams to the latest version\n3. Reinstall the Teams desktop client if cache clearing doesn't resolve it"
+  },
+  {
+    "kb_id": "KB0402",
+    "category": "Microsoft Teams Support",
+    "title": "Scheduled meetings not appearing in Teams calendar",
+    "symptoms": "Meetings visible in Outlook calendar do not show up in the Teams calendar tab",
+    "resolution": "1. Force a manual sync by signing out and back into Teams\n2. Confirm the same account/mailbox is used for both Outlook and Teams\n3. Check for a delayed calendar sync (can take up to a few hours) before escalating"
+  },
+  {
+    "kb_id": "KB0403",
+    "category": "Microsoft Teams Support",
+    "title": "Camera or microphone not detected in Teams meetings",
+    "symptoms": "Teams shows 'no camera found' or 'no microphone found' even though the device works in other apps",
+    "resolution": "1. Check Teams app permissions for camera/microphone access in device privacy settings\n2. Close other apps that may be holding the camera/mic (e.g. Zoom, browser tabs)\n3. Restart Teams after adjusting permissions; reinstall if device still isn't detected"
+  },
+  {
+    "kb_id": "KB0404",
+    "category": "Microsoft Teams Support",
+    "title": "Cannot join or create Teams channels for a course/team",
+    "symptoms": "User is unable to see or join a specific Team/channel they expect access to",
+    "resolution": "1. Confirm the user is on the correct roster/enrollment list for that Team\n2. Ask the Team owner to verify and resend the invite if membership is confirmed\n3. Have the user leave and rejoin the Team using the invite link"
+  },
+  {
+    "kb_id": "KB0405",
+    "category": "Microsoft Teams Support",
+    "title": "Screen share not working during a call",
+    "symptoms": "Screen share button is greyed out or shared screen appears black to other participants",
+    "resolution": "1. Grant Teams screen recording permission in device system settings (common on macOS)\n2. Update Teams and graphics drivers to latest versions\n3. Restart Teams and retry sharing a single application window instead of full screen"
+  },
+  {
+    "kb_id": "KB0406",
+    "category": "Microsoft Teams Support",
+    "title": "Teams notifications not appearing despite settings enabled",
+    "symptoms": "No desktop/mobile notifications for chats or mentions even though notification settings look correct",
+    "resolution": "1. Check OS-level notification permissions for the Teams app, not just in-app settings\n2. Confirm 'Do not disturb' or focus mode isn't active on the device\n3. Sign out and back into Teams to refresh the notification service registration"
+  },
+  {
+    "kb_id": "KB0407",
+    "category": "Microsoft Teams Support",
+    "title": "Teams login fails while other Microsoft apps work fine",
+    "symptoms": "Outlook, portal, and other services log in normally, but Teams specifically rejects the same credentials",
+    "resolution": "1. Clear Teams' local cache/credential cache folder completely\n2. Confirm the account has an active Teams license assigned\n3. Try Teams on the web (teams.microsoft.com) to isolate whether the issue is app-specific or account-wide"
+  }
+]
