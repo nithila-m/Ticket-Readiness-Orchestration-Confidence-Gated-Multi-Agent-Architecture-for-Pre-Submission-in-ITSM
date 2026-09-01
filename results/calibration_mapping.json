@@ -1,0 +1,42 @@
+[
+  {
+    "raw_confidence": 0.0,
+    "calibrated_confidence": 0.0
+  },
+  {
+    "raw_confidence": 0.5,
+    "calibrated_confidence": 0.3333333333333333
+  },
+  {
+    "raw_confidence": 0.6,
+    "calibrated_confidence": 0.3333333333333333
+  },
+  {
+    "raw_confidence": 0.75,
+    "calibrated_confidence": 0.8411214953271028
+  },
+  {
+    "raw_confidence": 0.8,
+    "calibrated_confidence": 0.8411214953271028
+  },
+  {
+    "raw_confidence": 0.85,
+    "calibrated_confidence": 0.8411214953271028
+  },
+  {
+    "raw_confidence": 0.9,
+    "calibrated_confidence": 0.8411214953271028
+  },
+  {
+    "raw_confidence": 0.95,
+    "calibrated_confidence": 0.8411214953271028
+  },
+  {
+    "raw_confidence": 0.99,
+    "calibrated_confidence": 0.8411214953271028
+  },
+  {
+    "raw_confidence": 1.0,
+    "calibrated_confidence": 0.9459459459459459
+  }
+]
