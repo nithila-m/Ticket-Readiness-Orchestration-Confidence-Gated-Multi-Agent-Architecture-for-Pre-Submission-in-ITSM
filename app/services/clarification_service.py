@@ -1,7 +1,9 @@
 """
 Orchestrates one conversational turn: append the user's message, rerun
 Agent 1 on the full updated transcript, refresh extraction/completeness/
-category on state, invoke Agent 2, log the decision, persist.
+category on state, apply the completeness gate, run Agent 3 and the KB
+decision gate when the gate passes, invoke Agent 2, log the decision,
+persist.
 
 Deliberately does not catch LLMProviderError from either agent - mirrors
 ticket_analysis_service.py's own convention of letting provider failures
@@ -9,6 +11,8 @@ propagate to the API layer rather than being silently masked here.
 """
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier
+from app.agents.kb_deflection_agent import KBDeflectionAgent, build_deflection_decision
+from app.config.settings import settings
 from app.repositories.base import ConversationRepository
 from app.schemas.clarification import ClarificationDecision, ClarificationLogEntry
 from app.schemas.conversation import ConversationState, Message
@@ -22,10 +26,12 @@ class ClarificationService:
         extraction_service: TicketAnalysisService,
         clarifier: AdaptiveClarifier,
         repository: ConversationRepository,
+        kb_agent: KBDeflectionAgent,
     ):
         self._extraction_service = extraction_service
         self._clarifier = clarifier
         self._repository = repository
+        self._kb_agent = kb_agent
 
     async def handle_message(
         self, conversation_id: str, user_message: str
@@ -47,8 +53,31 @@ class ClarificationService:
         state.completeness_score = analysis.completeness_score
         state.missing_or_uncertain_fields = analysis.missing_or_uncertain_fields
 
-        # 4. Invoke Agent 2 (includes the turn-budget safeguard internally).
-        decision = await self._clarifier.decide(state)
+        # 3.5. Completeness Gate + Agent 3 (KB retrieval). Below the
+        #      threshold, the request is too vague to trust an embedding
+        #      match against - kb_outcome stays None (never checked this
+        #      turn) and we go straight to Agent 2, same as before Agent 3
+        #      existed.
+        if state.completeness_score >= settings.kb_gate_completeness_threshold:
+            kb_result = await self._kb_agent.check(transcript)
+            state.kb_outcome = kb_result.outcome
+            state.kb_similarity_score = kb_result.similarity_score
+            state.kb_articles_checked = kb_result.articles_checked
+            state.kb_matched_kb_id = kb_result.matched_kb_id
+            state.kb_matched_title = kb_result.matched_title
+            state.kb_offered_resolution = kb_result.offered_resolution
+
+            # 4. KB decision gate: a strong KB match short-circuits straight
+            #    to DEFLECTED and Agent 2 never runs this turn - there's
+            #    nothing left to clarify if the issue is already resolved
+            #    by a KB article. Anything weaker (WEAK_MATCH/NO_MATCH)
+            #    proceeds to Agent 2 exactly as before this step existed.
+            if kb_result.outcome == "STRONG_MATCH":
+                decision = build_deflection_decision(kb_result)
+            else:
+                decision = await self._clarifier.decide(state)
+        else:
+            decision = await self._clarifier.decide(state)
 
         # 5. If Agent 2 asked a question, fold it into the transcript so the
         #    NEXT turn's Agent 1 rerun can label it correctly (see decision 2

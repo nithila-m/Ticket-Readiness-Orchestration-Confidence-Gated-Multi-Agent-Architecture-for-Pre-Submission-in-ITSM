@@ -33,14 +33,17 @@ class ConversationMessageResponse(BaseModel):
     affected_fields: list[str]
     reasoning: str
     confidence: float
+    kb_outcome: str | None = None
+    kb_matched_title: str | None = None
+    kb_offered_resolution: str | None = None
 
 
 @router.post("/{conversation_id}/messages", response_model=ConversationMessageResponse)
 async def post_message(
-    conversation_id: str,
-    body: ConversationMessageRequest,
-    service: ClarificationService = Depends(get_clarification_service),
-) -> ConversationMessageResponse:
+        conversation_id: str,
+        body: ConversationMessageRequest,
+        service: ClarificationService = Depends(get_clarification_service),
+    ) -> ConversationMessageResponse:
     try:
         state, decision = await service.handle_message(conversation_id, body.message)
     except LLMProviderError as exc:
@@ -56,4 +59,7 @@ async def post_message(
         affected_fields=decision.affected_fields,
         reasoning=decision.reasoning,
         confidence=decision.confidence,
+        kb_outcome=state.kb_outcome,
+        kb_matched_title=state.kb_matched_title,
+        kb_offered_resolution=state.kb_offered_resolution,
     )
