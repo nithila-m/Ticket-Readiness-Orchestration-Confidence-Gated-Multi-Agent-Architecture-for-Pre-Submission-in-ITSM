@@ -1,0 +1,151 @@
+ticket_id,category,expected_deflectable,predicted_deflectable,correct,resolution_confidence,matched_kb_id,matched_title
+WIFI-001,Wifi/Internet Support,True,False,False,0.48,KB0308,Wi-Fi works on phone but not on laptop in same room
+WIFI-002,Wifi/Internet Support,False,False,True,0.62,KB0305,"Device shows 'connected, no internet'"
+WIFI-003,Wifi/Internet Support,True,False,False,0.68,KB0302,Wi-Fi disconnects repeatedly after device wakes from sleep
+WIFI-004,AD Account Creation,False,True,False,0.72,KB0306,Cannot connect to Wi-Fi with correct password
+WIFI-005,Wifi/Internet Support,True,False,False,0.71,KB0302,Wi-Fi disconnects repeatedly after device wakes from sleep
+WIFI-006,Wifi/Internet Support,True,False,False,0.39,,
+WIFI-007,Wifi/Internet Support,True,False,False,0.53,KB0307,Intermittent Wi-Fi drops affecting multiple users in one area
+WIFI-008,Wifi/Internet Support,False,False,True,0.68,KB0307,Intermittent Wi-Fi drops affecting multiple users in one area
+WIFI-009,Wifi/Internet Support,False,False,True,0.54,KB0304,Wi-Fi very slow despite full signal strength
+WIFI-010,Wifi/Internet Support,False,False,True,0.49,KB0307,Intermittent Wi-Fi drops affecting multiple users in one area
+WIFI-011,Wifi/Internet Support,True,False,False,0.5,KB0308,Wi-Fi works on phone but not on laptop in same room
+WIFI-012,VIT Email Support,False,False,True,0.57,KB0506,Mail not syncing on mobile device
+WIFI-013,Wifi/Internet Support,True,False,False,0.7,KB0302,Wi-Fi disconnects repeatedly after device wakes from sleep
+WIFI-014,Wifi/Internet Support,False,False,True,0.48,KB0305,"Device shows 'connected, no internet'"
+WIFI-015,Wifi/Internet Support,True,False,False,0.57,KB0304,Wi-Fi very slow despite full signal strength
+WIFI-016,Wifi/Internet Support,False,True,False,0.74,KB0307,Intermittent Wi-Fi drops affecting multiple users in one area
+WIFI-017,Wifi/Internet Support,False,False,True,0.56,KB0307,Intermittent Wi-Fi drops affecting multiple users in one area
+WIFI-018,Wifi/Internet Support,False,False,True,0.52,KB0308,Wi-Fi works on phone but not on laptop in same room
+WIFI-019,Wifi/Internet Support,True,False,False,0.4,,
+WIFI-020,Microsoft Teams Support,False,False,True,0.56,KB0401,Teams stuck on sign-in spinner after correct password entry
+WIFI-021,Wifi/Internet Support,True,False,False,0.66,KB0305,"Device shows 'connected, no internet'"
+WIFI-022,Wifi/Internet Support,False,False,True,0.67,KB0308,Wi-Fi works on phone but not on laptop in same room
+WIFI-023,Wifi/Internet Support,True,False,False,0.6,KB0302,Wi-Fi disconnects repeatedly after device wakes from sleep
+WIFI-024,Wifi/Internet Support,True,False,False,0.54,KB0305,"Device shows 'connected, no internet'"
+WIFI-025,AD Account Creation,False,True,False,0.76,KB0303,Captive portal login page not loading
+WIFI-026,Wifi/Internet Support,True,False,False,0.65,KB0304,Wi-Fi very slow despite full signal strength
+WIFI-027,Wifi/Internet Support,False,False,True,0.47,KB0305,"Device shows 'connected, no internet'"
+WIFI-028,VIT Email Support,True,False,False,0.46,KB0502,"Mailbox storage full, unable to send or receive mail"
+WIFI-029,Wifi/Internet Support,False,False,True,0.31,,
+WIFI-030,Wifi/Internet Support,True,False,False,0.46,KB0306,Cannot connect to Wi-Fi with correct password
+TEAMS-001,Microsoft Teams Support,False,False,True,0.5,KB0406,Teams notifications not appearing despite settings enabled
+TEAMS-002,Microsoft Teams Support,True,False,False,0.72,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-003,Microsoft Teams Support,True,True,True,0.78,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-004,VIT Email Support,True,False,False,0.7,KB0407,Teams login fails while other Microsoft apps work fine
+TEAMS-005,Microsoft Teams Support,False,False,True,0.62,KB0407,Teams login fails while other Microsoft apps work fine
+TEAMS-006,Microsoft Teams Support,False,True,False,0.87,KB0405,Screen share not working during a call
+TEAMS-007,Microsoft Teams Support,False,False,True,0.55,KB0404,Cannot join or create Teams channels for a course/team
+TEAMS-008,Microsoft Teams Support,True,False,False,0.59,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-009,Microsoft Teams Support,True,False,False,0.48,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-010,Microsoft Teams Support,True,False,False,0.6,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-011,Microsoft Teams Support,False,False,True,0.55,KB0401,Teams stuck on sign-in spinner after correct password entry
+TEAMS-012,Microsoft Teams Support,True,False,False,0.6,KB0402,Scheduled meetings not appearing in Teams calendar
+TEAMS-013,AD Account Support,False,False,True,0.72,KB0407,Teams login fails while other Microsoft apps work fine
+TEAMS-014,Microsoft Teams Support,True,True,True,0.75,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-015,Microsoft Teams Support,False,False,True,0.48,KB0402,Scheduled meetings not appearing in Teams calendar
+TEAMS-016,Microsoft Teams Support,True,False,False,0.51,KB0404,Cannot join or create Teams channels for a course/team
+TEAMS-017,Microsoft Teams Support,False,False,True,0.56,KB0407,Teams login fails while other Microsoft apps work fine
+TEAMS-018,Microsoft Teams Support,False,False,True,0.48,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-019,Microsoft Teams Support,False,False,True,0.52,KB0401,Teams stuck on sign-in spinner after correct password entry
+TEAMS-020,AD Account Support,False,False,True,0.69,KB0407,Teams login fails while other Microsoft apps work fine
+TEAMS-021,Microsoft Teams Support,True,False,False,0.52,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-022,Microsoft Teams Support,True,False,False,0.66,KB0402,Scheduled meetings not appearing in Teams calendar
+TEAMS-023,VIT Email Support,True,False,False,0.69,KB0407,Teams login fails while other Microsoft apps work fine
+TEAMS-024,Microsoft Teams Support,False,False,True,0.62,KB0405,Screen share not working during a call
+TEAMS-025,Microsoft Teams Support,False,False,True,0.52,KB0403,Camera or microphone not detected in Teams meetings
+TEAMS-026,Microsoft Teams Support,True,False,False,0.45,KB0404,Cannot join or create Teams channels for a course/team
+TEAMS-027,Microsoft Teams Support,True,False,False,0.65,KB0404,Cannot join or create Teams channels for a course/team
+TEAMS-028,VIT Email Support,True,False,False,0.65,KB0401,Teams stuck on sign-in spinner after correct password entry
+TEAMS-029,Microsoft Teams Support,False,False,True,0.43,,
+TEAMS-030,Microsoft Teams Support,True,True,True,0.83,KB0406,Teams notifications not appearing despite settings enabled
+EMAIL-001,VIT Email Support,False,False,True,0.57,KB0505,Unable to send emails to external (non-VIT) addresses
+EMAIL-002,VIT Email Support,True,False,False,0.46,KB0502,"Mailbox storage full, unable to send or receive mail"
+EMAIL-003,VIT Email Support,True,False,False,0.7,KB0502,"Mailbox storage full, unable to send or receive mail"
+EMAIL-004,AD Account Support,True,False,False,0.55,KB0101,Account locked out after multiple failed login attempts
+EMAIL-005,VIT Email Support,False,True,False,0.72,KB0506,Mail not syncing on mobile device
+EMAIL-006,VIT Email Support,False,False,True,0.68,KB0503,Legitimate emails going to Junk/Spam folder
+EMAIL-007,VIT Email Support,False,False,True,0.47,KB0502,"Mailbox storage full, unable to send or receive mail"
+EMAIL-008,VIT Email Support,False,False,True,0.48,KB0502,"Mailbox storage full, unable to send or receive mail"
+EMAIL-009,VIT Email Support,False,False,True,0.44,,
+EMAIL-010,VIT Email Support,False,False,True,0.45,,
+EMAIL-011,VIT Email Support,True,True,True,0.83,KB0508,Auto-forwarding or rules not working as configured
+EMAIL-012,VIT Email Support,True,False,False,0.52,KB0506,Mail not syncing on mobile device
+EMAIL-013,Microsoft Teams Support,False,False,True,0.45,,
+EMAIL-014,VIT Email Support,True,True,True,0.78,KB0104,Password reset link expired before use
+EMAIL-015,VIT Email Support,False,False,True,0.47,KB0502,"Mailbox storage full, unable to send or receive mail"
+EMAIL-016,VIT Email Support,True,False,False,0.54,KB0503,Legitimate emails going to Junk/Spam folder
+EMAIL-017,VIT Email Support,False,False,True,0.49,KB0103,Password expired / forced reset on login
+EMAIL-018,VIT Email Support,False,False,True,0.53,KB0103,Password expired / forced reset on login
+EMAIL-019,VIT Email Support,False,False,True,0.41,,
+EMAIL-020,AD Account Support,False,False,True,0.57,KB0103,Password expired / forced reset on login
+EMAIL-021,VIT Email Support,True,False,False,0.67,KB0504,Old emails missing after account merge or migration
+EMAIL-022,VIT Email Support,True,False,False,0.56,KB0506,Mail not syncing on mobile device
+EMAIL-023,Microsoft Teams Support,True,False,False,0.44,,
+EMAIL-024,VIT Email Support,False,False,True,0.54,KB0502,"Mailbox storage full, unable to send or receive mail"
+EMAIL-025,VIT Email Support,False,False,True,0.66,KB0402,Scheduled meetings not appearing in Teams calendar
+EMAIL-026,VIT Email Support,True,False,False,0.41,,
+EMAIL-027,VIT Email Support,True,False,False,0.52,KB0506,Mail not syncing on mobile device
+EMAIL-028,AD Account Support,True,False,False,0.5,KB0101,Account locked out after multiple failed login attempts
+EMAIL-029,VIT Email Support,False,False,True,0.42,,
+EMAIL-030,VIT Email Support,True,False,False,0.47,KB0502,"Mailbox storage full, unable to send or receive mail"
+ADA-001,AD Account Creation,True,False,False,0.68,KB0101,Account locked out after multiple failed login attempts
+ADA-002,AD Account Creation,True,False,False,0.54,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-003,VIT Email,False,False,True,0.67,KB0102,New account can log in but mailbox not provisioned
+ADA-004,AD Account Creation,False,False,True,0.62,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-005,AD Account Creation,False,False,True,0.62,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-006,AD Account Creation,True,True,True,0.73,KB0103,Password expired / forced reset on login
+ADA-007,AD Account Creation,False,False,True,0.49,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-008,Microsoft Teams Support,False,False,True,0.72,KB0401,Teams stuck on sign-in spinner after correct password entry
+ADA-009,AD Account Creation,False,False,True,0.61,KB0103,Password expired / forced reset on login
+ADA-010,AD Account Creation,True,False,False,0.63,KB0101,Account locked out after multiple failed login attempts
+ADA-011,AD Account Creation,False,False,True,0.44,,
+ADA-012,AD Account Creation,True,False,False,0.65,KB0107,Forgotten AD username/login ID format
+ADA-013,VIT Email,False,False,True,0.72,KB0501,Outlook repeatedly prompts for password without accepting it
+ADA-014,AD Account Creation,False,False,True,0.72,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-015,AD Account Creation,True,False,False,0.7,KB0104,Password reset link expired before use
+ADA-016,AD Account Creation,False,False,True,0.6,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-017,AD Account Creation,False,False,True,0.63,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-018,AD Account Creation,False,False,True,0.53,KB0306,Cannot connect to Wi-Fi with correct password
+ADA-019,AD Account Creation,True,False,False,0.68,KB0107,Forgotten AD username/login ID format
+ADA-020,AD Account Creation,False,True,False,0.81,KB0106,VPN access denied for a newly created account
+ADA-021,Microsoft Teams Support,False,True,False,0.91,KB0402,Scheduled meetings not appearing in Teams calendar
+ADA-022,AD Account Creation,False,False,True,0.36,,
+ADA-023,AD Account Creation,True,False,False,0.53,KB0101,Account locked out after multiple failed login attempts
+ADA-024,AD Account Creation,False,False,True,0.58,KB0105,New employee/contractor account stuck in 'pending HR approval'
+ADA-025,AD Account Creation,True,False,False,0.53,KB0104,Password reset link expired before use
+ADA-026,AD Account Creation,False,False,True,0.39,,
+ADA-027,AD Account Creation,False,False,True,0.69,KB0306,Cannot connect to Wi-Fi with correct password
+ADA-028,AD Account Creation,True,False,False,0.6,KB0103,Password expired / forced reset on login
+ADA-029,VIT Email,True,True,True,0.8,KB0108,Old mailbox data missing after account merge/migration
+ADA-030,AD Account Creation,False,False,True,0.42,,
+PRN-001,Printer Support,False,False,True,0.51,KB0201,Printer showing 'Offline' despite being powered on
+PRN-002,Printer Support,True,False,False,0.72,KB0201,Printer showing 'Offline' despite being powered on
+PRN-003,Printer Support,False,True,False,0.74,KB0206,Repeated paper jams on same printer
+PRN-004,Printer Support,True,False,False,0.65,KB0204,"Faded, streaky, or blank printouts"
+PRN-005,Printer Support,False,False,True,0.52,KB0205,Wireless printer disappears from network after Wi-Fi maintenance
+PRN-006,Printer Support,True,False,False,0.67,KB0203,"Print jobs stuck in queue, nothing prints"
+PRN-007,Printer Support,True,False,False,0.55,KB0206,Repeated paper jams on same printer
+PRN-008,AD Account Creation,False,False,True,0.46,KB0205,Wireless printer disappears from network after Wi-Fi maintenance
+PRN-009,Printer Support,True,True,True,0.79,KB0206,Repeated paper jams on same printer
+PRN-010,Printer Support,False,False,True,0.51,KB0201,Printer showing 'Offline' despite being powered on
+PRN-011,Printer Support,True,True,True,0.85,KB0205,Wireless printer disappears from network after Wi-Fi maintenance
+PRN-012,Printer Support,False,False,True,0.51,KB0206,Repeated paper jams on same printer
+PRN-013,Printer Support,False,False,True,0.6,KB0202,Print spooler service won't start (Error 1068)
+PRN-014,Printer Support,True,True,True,0.74,KB0204,"Faded, streaky, or blank printouts"
+PRN-015,Printer Support,False,False,True,0.57,KB0202,Print spooler service won't start (Error 1068)
+PRN-016,Printer Support,True,True,True,0.79,KB0202,Print spooler service won't start (Error 1068)
+PRN-017,Printer Support,True,True,True,0.9,KB0207,Duplex (double-sided) printing not working
+PRN-018,Printer Support,True,True,True,0.82,KB0208,Vertical lines or streaks on every printout
+PRN-019,Printer Support,False,False,True,0.47,KB0205,Wireless printer disappears from network after Wi-Fi maintenance
+PRN-020,Printer Support,True,False,False,0.33,,
+PRN-021,Printer Support,False,False,True,0.47,KB0206,Repeated paper jams on same printer
+PRN-022,Printer Support,True,False,False,0.43,,
+PRN-023,Wifi/Internet Support,False,False,True,0.65,KB0205,Wireless printer disappears from network after Wi-Fi maintenance
+PRN-024,Printer Support,False,False,True,0.48,KB0204,"Faded, streaky, or blank printouts"
+PRN-025,Printer Support,False,False,True,0.49,KB0206,Repeated paper jams on same printer
+PRN-026,Printer Support,False,False,True,0.42,,
+PRN-027,Printer Support,False,False,True,0.62,KB0206,Repeated paper jams on same printer
+PRN-028,Printer Support,False,False,True,0.43,,
+PRN-029,AD Account Creation,False,False,True,0.45,,
+PRN-030,Printer Support,True,False,False,0.66,KB0206,Repeated paper jams on same printer

@@ -214,6 +214,15 @@ function handleResponse(data) {
       endConversationInput();
       break;
 
+    case "DEFLECTED":
+      addAssistantMessage(
+        "Good news — I found a knowledge base article that should resolve this without needing a ticket:",
+        data
+      );
+      showCompletionCard("resolved", data);
+      endConversationInput();
+      break;
+
     default:
       addErrorMessage(`Unrecognized action from server: ${data.action}`);
       setComposerEnabled(true);
@@ -337,13 +346,28 @@ function renderQuickReplies() {
 function showCompletionCard(kind, data) {
   el.completionCard.className = `completion-card ${kind}`;
   const title =
-    kind === "ready" ? "✅ Ticket Ready" : "🧑‍💼 Escalated to Human Support";
+    kind === "ready"
+      ? "✅ Ticket Ready"
+      : kind === "resolved"
+      ? "📚 Resolved via Knowledge Base"
+      : "🧑‍💼 Escalated to Human Support";
   const categoryLabel = data.category
     ? CATEGORY_LABELS[data.category] || data.category
     : "Undetermined";
 
+  const resolutionBlock =
+    kind === "resolved" && data.kb_offered_resolution
+      ? `<div class="row" style="display:block;">
+            <strong>${escapeHtml(data.kb_matched_title || "Suggested fix")}</strong>
+            <pre style="white-space:pre-wrap;margin:6px 0 0 0;font:inherit;">${escapeHtml(
+              data.kb_offered_resolution
+            )}</pre>
+          </div>`
+      : "";
+
   el.completionCard.innerHTML = `
     <h3>${title}</h3>
+    ${resolutionBlock}
     <div class="row"><span>Category</span><span>${escapeHtml(categoryLabel)}</span></div>
     <div class="row"><span>Completeness</span><span>${Math.round(
       (data.completeness_score || 0) * 100

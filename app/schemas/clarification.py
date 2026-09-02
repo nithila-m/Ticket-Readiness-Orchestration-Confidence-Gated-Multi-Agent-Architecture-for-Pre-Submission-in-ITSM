@@ -14,8 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class ClarificationDecision(BaseModel):
     """A single Agent 2 decision: what to do next, and why."""
-
-    action: Literal["ASK_CLARIFICATION", "READY", "RECHECK", "ESCALATE"]
+    action: Literal["ASK_CLARIFICATION", "READY", "RECHECK", "ESCALATE", "DEFLECTED"]
     reasoning: str = Field(min_length=1)
     information_gap: str | None = None
     question: str | None = None

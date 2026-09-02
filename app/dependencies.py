@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier
 from app.agents.information_extractor import InformationExtractor
+from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
@@ -36,9 +37,20 @@ def get_conversation_repository() -> InMemoryConversationRepository:
 
 
 @lru_cache
+def get_kb_deflection_agent() -> KBDeflectionAgent:
+    """
+    Builds the real, ChromaDB-backed KBDeflectionAgent (Agent 3). Uses the
+    module's default retrieve_fn (TRO_Codes' deflect(), via the
+    run_kb_retrieval bridge) - only tests override this with a fake.
+    """
+    return KBDeflectionAgent()
+
+
+@lru_cache
 def get_clarification_service() -> ClarificationService:
     """
-    Builds the real, Groq-backed ClarificationService for Agent 2.
+    Builds the real, Groq-backed ClarificationService for Agent 2, plus
+    Agent 3's KBDeflectionAgent.
     Reuses get_ticket_analysis_service() for Agent 1 rather than
     constructing a second GeminiProvider/extractor - one extraction
     pipeline shared by both /analyze and the conversational endpoint.
@@ -56,5 +68,6 @@ def get_clarification_service() -> ClarificationService:
     )
 
     repository = get_conversation_repository()
+    kb_agent = get_kb_deflection_agent()
 
-    return ClarificationService(extraction_service, clarifier, repository)
+    return ClarificationService(extraction_service, clarifier, repository, kb_agent)

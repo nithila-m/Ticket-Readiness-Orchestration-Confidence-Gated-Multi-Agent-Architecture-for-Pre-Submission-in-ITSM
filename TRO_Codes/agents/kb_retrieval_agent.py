@@ -38,24 +38,41 @@ from chroma_client1 import get_kb_collection
 kb_collection = get_kb_collection()
 
 
-def deflect(ticket_text: str, top_k: int = 3, threshold: float = 0.72) -> dict:
+def deflect( ticket_text: str, top_k: int = 3, strong_threshold: float = 0.72, weak_threshold: float = 0.45,) -> dict:
     """
     Queries the KB collection for the closest matching article(s) to
-    `ticket_text` and decides whether to offer self-resolution.
+    `ticket_text` and classifies the outcome into one of three states:
+
+        STRONG_MATCH  - confidence >= strong_threshold -> safe to deflect
+        WEAK_MATCH    - weak_threshold <= confidence < strong_threshold
+                        -> a related article exists but isn't a confident
+                           enough match to self-resolve on its own
+        NO_MATCH      - confidence < weak_threshold, or the collection is
+                        empty -> nothing usable in the KB for this ticket
+
+    `deflect` stays as a boolean (True only for STRONG_MATCH) so existing
+    callers built against the old binary contract don't break; `outcome`
+    is the new field that actually distinguishes WEAK_MATCH from NO_MATCH.
 
     Args:
         ticket_text: the user's issue description (subject + message,
                       combined the same way tickets were embedded at
                       ingestion time — see prepare_ticket_records()).
         top_k: how many KB candidates to retrieve for logging/audit.
-        threshold: minimum cosine similarity required to offer deflection.
-                   0.72 is a starting point — validate on your own eval
-                   set (Metric 3 / 6 in the project proposal) before
-                   trusting it in a live demo.
+        strong_threshold: minimum cosine similarity required to offer
+                           deflection outright. 0.72 is a starting point -
+                           validate on your own eval set before trusting
+                           it in a live demo.
+        weak_threshold: minimum cosine similarity to surface a candidate
+                         at all (e.g. "you might also check..."), below
+                         which the match is treated as noise. 0.45 is a
+                         starting point alongside strong_threshold - both
+                         should be tuned together on the same eval set.
 
     Returns:
-        dict with deflect decision, confidence score, KB ids checked, and
-        (if deflected) the matched title + resolution text.
+        dict with outcome, deflect decision, confidence score, KB ids
+        checked, and (for STRONG_MATCH/WEAK_MATCH) the matched title +
+        resolution text.
     """
     results = kb_collection.query(
         query_texts=[ticket_text],   # collection's own embedding_function handles encoding
@@ -65,6 +82,7 @@ def deflect(ticket_text: str, top_k: int = 3, threshold: float = 0.72) -> dict:
     # No KB articles in the collection at all — nothing to deflect against.
     if not results["ids"][0]:
         return {
+            "outcome": "NO_MATCH",
             "deflect": False,
             "kb_articles_checked": [],
             "resolution_confidence": 0.0,
@@ -80,20 +98,29 @@ def deflect(ticket_text: str, top_k: int = 3, threshold: float = 0.72) -> dict:
         "resolution_confidence": round(confidence, 2),
     }
 
-    if confidence >= threshold:
+    if confidence >= strong_threshold:
         return {
             **base_response,
+            "outcome": "STRONG_MATCH",
             "deflect": True,
             "matched_kb_id": results["ids"][0][0],
-            #"matched_title": best_metadata["title"],
-            #"offered_resolution": best_metadata["resolution"],
             "matched_title": best_metadata.get("title", ""),
             "offered_resolution": best_metadata.get("resolution", ""),
+        }
 
+    if confidence >= weak_threshold:
+        return {
+            **base_response,
+            "outcome": "WEAK_MATCH",
+            "deflect": False,
+            "matched_kb_id": results["ids"][0][0],
+            "matched_title": best_metadata.get("title", ""),
+            "offered_resolution": best_metadata.get("resolution", ""),
         }
 
     return {
         **base_response,
+        "outcome": "NO_MATCH",
         "deflect": False,
     }
 
