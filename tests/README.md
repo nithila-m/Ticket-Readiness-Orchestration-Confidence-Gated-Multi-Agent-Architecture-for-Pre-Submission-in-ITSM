@@ -25,4 +25,4 @@ A confidence-gated multi-agent architecture for pre-submission clarification, de
 
 ## Status
 
-Milestone 1: Project initialization + health check endpoint. Agent 1 (information extraction) in progress.
+Milestone 1: Project initialization + health check endpoint. Agent 1 (information extraction), 2, 3 in progress.
