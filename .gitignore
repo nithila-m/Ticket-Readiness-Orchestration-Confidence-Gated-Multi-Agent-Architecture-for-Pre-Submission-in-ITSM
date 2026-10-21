@@ -16,3 +16,8 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# SQLite (tro.db and WAL side files)
+*.db
+*.db-wal
+*.db-shm
