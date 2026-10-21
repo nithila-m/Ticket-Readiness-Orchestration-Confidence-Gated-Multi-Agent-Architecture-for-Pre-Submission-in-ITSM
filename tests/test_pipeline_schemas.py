@@ -101,6 +101,44 @@ def test_classification_result_rejects_unknown_source():
         )
 
 
+def _classification(**overrides) -> ClassificationResult:
+    data = dict(
+        category="printer_support", priority="P3", assignee_group="Desktop Support",
+        routing_rationale="Printer symptom on one device.", confidence=0.8, source="llm",
+    )
+    data.update(overrides)
+    return ClassificationResult(**data)
+
+
+def test_classification_result_rejects_hgb_source():
+    # HGB fallback is future work, not part of this build.
+    with pytest.raises(ValidationError):
+        _classification(source="hgb")
+
+
+@pytest.mark.parametrize("bad_category", ["Printer Support", "projector_support", ""])
+def test_classification_result_rejects_non_internal_category(bad_category):
+    with pytest.raises(ValidationError, match="normalize_category_label"):
+        _classification(category=bad_category)
+
+
+@pytest.mark.parametrize("bad_category", ["Printer Support", "projector_support", ""])
+def test_ticket_record_rejects_non_internal_category(bad_category):
+    with pytest.raises(ValidationError, match="normalize_category_label"):
+        _ticket(category=bad_category)
+
+
+def test_classification_result_rejects_unknown_team():
+    with pytest.raises(ValidationError, match="assignee_group"):
+        _classification(assignee_group="Printer Wizards")
+
+
+def test_classification_result_accepts_general_with_default_team():
+    r = _classification(category="general", assignee_group="Service Desk L1", source="rule")
+    assert r.category == "general"
+    assert r.assignee_group == "Service Desk L1"
+
+
 # --- CorrelationResult (Agent 4) ----------------------------------------
 
 def test_correlation_result_defaults_for_no_match():
