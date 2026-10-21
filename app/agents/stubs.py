@@ -8,20 +8,13 @@ Delete this file once both real agents are merged.
 """
 
 from app.agents.interfaces import OpenTicketPool
+from app.config.routing import CATEGORY_TO_TEAM, DEFAULT_TEAM
 from app.schemas.conversation import ConversationState
 from app.schemas.pipeline import ClassificationResult, CorrelationResult
 
-# Internal category key (Agent 1 / category_profiles.py) -> support team.
-# Placeholder routing table; Agent 5 owns the real one.
-STUB_CATEGORY_TO_TEAM: dict[str, str] = {
-    "wifi_internet": "Network Operations",
-    "ms_teams": "Collaboration Tools Support",
-    "vit_email": "Messaging Support",
-    "ad_account_creation": "Identity & Access Management",
-    "printer_support": "Desktop Support",
-    "general": "Service Desk L1",
-}
-DEFAULT_TEAM = "Service Desk L1"
+# Kept as an alias so existing imports keep working; the real table now
+# lives in app/config/routing.py (owned by Agent 5).
+STUB_CATEGORY_TO_TEAM: dict[str, str] = CATEGORY_TO_TEAM
 
 STUB_PRIORITY = "P3"
 STUB_CONFIDENCE = 0.9

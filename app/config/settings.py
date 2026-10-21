@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +23,16 @@ class Settings(BaseSettings):
     # article by wording alone) - defer to Agent 2 clarifying first.
     kb_gate_completeness_threshold: float = 0.5
 
+    # --- Agent 5 (Classify, Prioritise, Explain) ---
+    # Empty = use groq_model (resolved in _default_classification_model), so
+    # overriding GROQ_MODEL alone still moves both agents together.
+    classification_groq_model: str = ""
+    # Owned by the orchestrator's confidence gate, NOT by Agent 5: Agent 5
+    # always returns a result and never compares against this itself.
+    # Below it, the orchestrator should route to PENDING_REVIEW instead
+    # of dispatching.
+    classification_confidence_threshold: float = 0.6
+
     # --- Persistence (Agent 6 + audit) ---
     sqlite_path: Path = _PROJECT_ROOT / "tro.db"
 
@@ -37,6 +48,12 @@ class Settings(BaseSettings):
 
     # Interim wiring until the LangGraph orchestrator replaces ClarificationService
     auto_dispatch_on_ready: bool = False
+
+    @model_validator(mode="after")
+    def _default_classification_model(self):
+        if not self.classification_groq_model:
+            self.classification_groq_model = self.groq_model
+        return self
 
 
 settings = Settings()
