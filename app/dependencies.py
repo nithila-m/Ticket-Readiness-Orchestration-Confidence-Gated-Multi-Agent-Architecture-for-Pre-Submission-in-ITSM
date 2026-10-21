@@ -2,9 +2,11 @@ from functools import lru_cache
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier
 from app.agents.classification_agent import ClassificationAgent
+from app.agents.dispatcher import Dispatcher
 from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
+from app.integrations.base import NullAdapter
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_classification_provider import GroqClassificationProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
@@ -24,6 +26,16 @@ def get_store() -> SqliteStore:
     Tests override this with app.dependency_overrides[get_store].
     """
     return SqliteStore(settings.sqlite_path)
+
+
+@lru_cache
+def get_dispatcher() -> Dispatcher:
+    """
+    Agent 6 Dispatcher: SQLite first, then the external adapter. Local-only
+    (NullAdapter) until the Jira adapter lands in Phase 4. Not wired into
+    ClarificationService or the API yet (Phase 5).
+    """
+    return Dispatcher(get_store(), NullAdapter())
 
 
 @lru_cache
