@@ -30,10 +30,11 @@ LIMITATIONS (repeat these wherever the numbers are quoted):
     app queries with build_kb_query() over Agent 1's extracted fields,
     which are not stored for this dataset, so these numbers are a proxy
     for live retrieval.
-  - Correct-article rate is computed ONLY on gold entries a human marked
-    "source": "confirmed" in data/eval/agent3_gold_kb.json. Proposed
-    entries come from this same retriever, so scoring against them would
-    be circular; until some are confirmed the column is empty.
+  - Correct-article rate is computed ONLY on gold entries marked
+    "source": "confirmed" in data/eval/agent3_gold_kb.json; until some are
+    confirmed the column is empty. A confirmed label that still equals the
+    unfiltered top-1 article (i.e. was confirmed without correction) makes
+    the filter=none rate circular for that ticket; the report counts them.
 
 Outputs: results/agent3_threshold_sweep.csv, results/agent3_eval.md
 """
@@ -182,7 +183,11 @@ def _table(results: list[dict], gate: str) -> list[str]:
     return lines
 
 
-def write_markdown(results: list[dict], rows: list[dict], n_confirmed: int):
+def write_markdown(results: list[dict], rows: list[dict], gold: dict[str, str | None]):
+    n_confirmed = len(gold)
+    # Confirmed labels identical to this run's unfiltered top-1: the retriever's
+    # own pick, so filter=none is scored against itself for these tickets.
+    n_same_as_top1 = sum(1 for r in rows if gold.get(r["ticket_id"], "") == r["none_kb_id"])
     n = len(rows)
     n_pos = sum(r["expected"] for r in rows)
     current = settings.kb_strong_threshold
@@ -205,7 +210,11 @@ def write_markdown(results: list[dict], rows: list[dict], n_confirmed: int):
         "- `agent1` filter = Agent 1's real predicted category (from `results/agent1_eval_results.csv`).",
         "  `oracle` (true_category) is in the CSV as an upper bound only.",
         f"- \\*Correct-article rate uses only gold entries marked `confirmed` ({n_confirmed} so far). "
-        "Proposed entries come from this same retriever, so scoring against them would be circular.",
+        f"**{n_same_as_top1} of them equal the unfiltered top-1 article**, i.e. the retriever's own pick",
+        "  confirmed without correction. For those tickets the `none` column is scored against itself",
+        "  (circular: a deflection can never be \"wrong\"), so it measures agreement with the retriever,",
+        "  not article accuracy. The filtered columns differ only where the category filter changes the",
+        "  article offered.",
         "",
         "## Baselines and separability (gate off)",
         "",
@@ -270,7 +279,7 @@ def main():
         writer = csv.DictWriter(f, fieldnames=results[0].keys())
         writer.writeheader()
         writer.writerows(results)
-    write_markdown(results, rows, len(gold))
+    write_markdown(results, rows, gold)
 
     print(f"Wrote {CSV_PATH.relative_to(REPO_ROOT)} and {MD_PATH.relative_to(REPO_ROOT)}")
     for mode in FILTERS:
