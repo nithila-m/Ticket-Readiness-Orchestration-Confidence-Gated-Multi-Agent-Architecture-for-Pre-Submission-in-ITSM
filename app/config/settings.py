@@ -30,6 +30,22 @@ class Settings(BaseSettings):
     kb_strong_threshold: float = 0.64
     kb_weak_threshold: float = 0.45
 
+    # --- Agent 4 (Correlation Engine: duplicates + incident clusters) ---
+    # Cosine similarity at/above which the best open ticket is a duplicate.
+    corr_dup_threshold: float = 0.85
+    # Similarity at/above which an open ticket counts towards a cluster.
+    corr_cluster_threshold: float = 0.70
+    # Tickets needed for an incident cluster, INCLUDING the incoming one
+    # (so 3 = the new ticket + at least 2 matching open tickets).
+    corr_cluster_min_count: int = 3
+    corr_cluster_window_hours: float = 6
+    corr_lookback_hours: float = 72
+    # Category is a scoring signal, not a filter (Agent 4 runs before
+    # Agent 5): agreement adds this bonus; a cross-category duplicate needs
+    # raw similarity >= corr_cross_category_dup_threshold.
+    corr_category_agreement_bonus: float = 0.05
+    corr_cross_category_dup_threshold: float = 0.95
+
     # --- Agent 5 (Classify, Prioritise, Explain) ---
     # Empty = use groq_model (resolved in _default_classification_model), so
     # overriding GROQ_MODEL alone still moves both agents together.
