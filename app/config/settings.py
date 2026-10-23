@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # a bare "wifi not working" could coincidentally sit close to some KB
     # article by wording alone) - defer to Agent 2 clarifying first.
     kb_gate_completeness_threshold: float = 0.5
+    # Cosine-similarity cut-offs for deflect()'s three outcomes:
+    # >= strong -> STRONG_MATCH (deflect), >= weak -> WEAK_MATCH (Agent 2
+    # still runs), below weak -> NO_MATCH. Defaults reproduce deflect()'s
+    # own hardcoded defaults; tune with scripts/sweep_agent3_thresholds.py.
+    kb_strong_threshold: float = 0.72
+    kb_weak_threshold: float = 0.45
 
     # --- Agent 5 (Classify, Prioritise, Explain) ---
     # Empty = use groq_model (resolved in _default_classification_model), so
