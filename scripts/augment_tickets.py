@@ -23,22 +23,20 @@ label_type values:
   cluster_member          member of an incident cluster (same building,
                           same category, within a short window)
   duplicate               restatement of an earlier ticket (duplicate_of set)
-  cross_building_pattern  original PRN cluster_2: the same printer error in
-                          two different buildings. Under the "different
-                          buildings can't cluster" rule it is not an
-                          incident cluster, so it is kept out of positives.
   hard_negative_building  same category/symptom as a cluster, other building, same time
   hard_negative_time      same building/category/symptom, outside the cluster window
   hard_negative_category  same building/time as a cluster, different category
 
-Relabelling of the original duplicate_cluster_id groups (the original field
-is kept untouched; per-category ids like "cluster_1" are not unique, so
-gold_cluster_id is "<PREFIX>-cluster_N"):
-  ADA cluster_1 is one requester following up about the same account
-  (Ganesh Iyer), so ADA-014 and ADA-022 are labelled duplicates of ADA-005,
-  and ADA-005 itself is background.
-  PRN cluster_2 is cross_building_pattern (see above).
-  All other groups are cluster_member.
+The original duplicate_cluster_id groups are kept as labelled
+(cluster_member); the original field is kept untouched, and because
+per-category ids like "cluster_1" are not unique, gold_cluster_id is
+"<PREFIX>-cluster_N". Two of them are NOT clean incidents and are kept on
+purpose, so the eval shows how the agents handle them:
+  ADA cluster_1  one requester following up about the same account
+                 (Ganesh Iyer): really a duplicate chain.
+  PRN cluster_2  the same printer error in two different buildings, which
+                 the building rule will never cluster.
+Only the new incident clusters are required to share one building.
 
 These labels come from this generator, not from real ITSM history.
 """
@@ -86,8 +84,6 @@ EXISTING_CLUSTER_ANCHORS_H = {
 }
 EXISTING_SPREAD_MIN = 60  # members of an existing cluster arrive within an hour
 
-FOLLOWUP_DUPLICATES = {"ADA-014": "ADA-005", "ADA-022": "ADA-005"}
-CROSS_BUILDING = {("PRN", "cluster_2")}
 
 
 def _t(ticket_id, category, building, room, priority, subject, message,
@@ -332,21 +328,8 @@ def build(rng: random.Random) -> list[dict]:
         for t in members:
             t = dict(t)
             t["created_at_offset_minutes"] = anchors[gold_id] + rng.randint(0, EXISTING_SPREAD_MIN)
-            if t["ticket_id"] in FOLLOWUP_DUPLICATES:
-                _labels(t, "duplicate", duplicate_of=FOLLOWUP_DUPLICATES[t["ticket_id"]])
-            elif t["ticket_id"] in FOLLOWUP_DUPLICATES.values():
-                _labels(t, "background")  # the ticket the follow-ups restate
-            elif (prefix, cid) in CROSS_BUILDING:
-                _labels(t, "cross_building_pattern")
-            else:
-                _labels(t, "cluster_member", cluster=gold_id)
-            out.append(t)
+            out.append(_labels(t, "cluster_member", cluster=gold_id))
             placed.add(t["ticket_id"])
-    # follow-ups arrive after the ticket they restate
-    first = {t["ticket_id"]: t for t in out}
-    for dup_id, orig_id in FOLLOWUP_DUPLICATES.items():
-        lo = first[orig_id]["created_at_offset_minutes"] + 5
-        first[dup_id]["created_at_offset_minutes"] = max(first[dup_id]["created_at_offset_minutes"], lo)
 
     # 2. new clusters
     for gold_id, hours, spread, tickets in NEW_CLUSTERS:
@@ -414,7 +397,8 @@ def validate(tickets: list[dict]):
     for cid, members in clusters.items():
         offsets = [m["created_at_offset_minutes"] for m in members]
         assert max(offsets) - min(offsets) <= CLUSTER_WINDOW_MIN, cid
-        assert len({normalize_building(m["building"]) for m in members}) == 1, cid
+        if cid.startswith("INC-"):  # original groups are kept as labelled, see docstring
+            assert len({normalize_building(m["building"]) for m in members}) == 1, cid
         assert len({m["true_category"] for m in members}) == 1, cid
         assert min(offsets) >= -LOOKBACK_MIN, cid
     canonical = set(CATEGORY_KEY_TO_DISPLAY.values())

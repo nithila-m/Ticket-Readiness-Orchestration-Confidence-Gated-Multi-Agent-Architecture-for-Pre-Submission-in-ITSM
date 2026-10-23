@@ -2157,31 +2157,6 @@
     "hard_negative_of": null
   },
   {
-    "ticket_id": "ADA-005",
-    "category_selected": "AD Account Creation",
-    "true_category": "AD Account Creation",
-    "building": "Admin Block",
-    "room": "AB-204",
-    "priority": "HIGH",
-    "subject": "Ganesh Iyer account still not created",
-    "message": "This is regarding Mr. Ganesh Iyer (contractual, IT Dept). Approval was sent by HR three days back but AD account is still not created, he cannot access anything on campus systems. Please expedite, this is holding up his onboarding.",
-    "ocr_text": null,
-    "completeness_level": "partial",
-    "is_deflectable": false,
-    "duplicate_cluster_id": "cluster_1",
-    "missing_fields": [
-      "error_or_symptom",
-      "device_context",
-      "troubleshooting_done"
-    ],
-    "created_at_offset_minutes": -2142,
-    "status": "OPEN",
-    "label_type": "background",
-    "gold_cluster_id": null,
-    "duplicate_of": null,
-    "hard_negative_of": null
-  },
-  {
     "ticket_id": "ADA-022",
     "category_selected": "AD Account Creation",
     "true_category": "AD Account Creation",
@@ -2201,11 +2176,36 @@
       "device_context",
       "troubleshooting_done"
     ],
-    "created_at_offset_minutes": -2137,
+    "created_at_offset_minutes": -2144,
     "status": "OPEN",
-    "label_type": "duplicate",
-    "gold_cluster_id": null,
-    "duplicate_of": "ADA-005",
+    "label_type": "cluster_member",
+    "gold_cluster_id": "ADA-cluster_1",
+    "duplicate_of": null,
+    "hard_negative_of": null
+  },
+  {
+    "ticket_id": "ADA-005",
+    "category_selected": "AD Account Creation",
+    "true_category": "AD Account Creation",
+    "building": "Admin Block",
+    "room": "AB-204",
+    "priority": "HIGH",
+    "subject": "Ganesh Iyer account still not created",
+    "message": "This is regarding Mr. Ganesh Iyer (contractual, IT Dept). Approval was sent by HR three days back but AD account is still not created, he cannot access anything on campus systems. Please expedite, this is holding up his onboarding.",
+    "ocr_text": null,
+    "completeness_level": "partial",
+    "is_deflectable": false,
+    "duplicate_cluster_id": "cluster_1",
+    "missing_fields": [
+      "error_or_symptom",
+      "device_context",
+      "troubleshooting_done"
+    ],
+    "created_at_offset_minutes": -2142,
+    "status": "OPEN",
+    "label_type": "cluster_member",
+    "gold_cluster_id": "ADA-cluster_1",
+    "duplicate_of": null,
     "hard_negative_of": null
   },
   {
@@ -2224,9 +2224,9 @@
     "missing_fields": [],
     "created_at_offset_minutes": -2123,
     "status": "OPEN",
-    "label_type": "duplicate",
-    "gold_cluster_id": null,
-    "duplicate_of": "ADA-005",
+    "label_type": "cluster_member",
+    "gold_cluster_id": "ADA-cluster_1",
+    "duplicate_of": null,
     "hard_negative_of": null
   },
   {
@@ -2622,8 +2622,8 @@
     "missing_fields": [],
     "created_at_offset_minutes": -1775,
     "status": "OPEN",
-    "label_type": "cross_building_pattern",
-    "gold_cluster_id": null,
+    "label_type": "cluster_member",
+    "gold_cluster_id": "PRN-cluster_2",
     "duplicate_of": null,
     "hard_negative_of": null
   },
@@ -2664,8 +2664,8 @@
     "missing_fields": [],
     "created_at_offset_minutes": -1764,
     "status": "OPEN",
-    "label_type": "cross_building_pattern",
-    "gold_cluster_id": null,
+    "label_type": "cluster_member",
+    "gold_cluster_id": "PRN-cluster_2",
     "duplicate_of": null,
     "hard_negative_of": null
   },
