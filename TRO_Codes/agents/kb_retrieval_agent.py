@@ -31,11 +31,19 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from chroma_client1 import get_kb_collection
+# Opened lazily on the first deflect() call and reused afterwards. Opening
+# at import time made merely importing this module (e.g. during pytest
+# collection) load chromadb + the embedding model and touch chroma_db/.
+_kb_collection = None
 
-# Loaded once at import time and reused across calls — avoids reopening
-# the persisted client/collection on every single deflect() call.
-kb_collection = get_kb_collection()
+
+def get_collection():
+    global _kb_collection
+    if _kb_collection is None:
+        from chroma_client1 import get_kb_collection
+
+        _kb_collection = get_kb_collection()
+    return _kb_collection
 
 
 def deflect( ticket_text: str, top_k: int = 3, strong_threshold: float = 0.72, weak_threshold: float = 0.45,) -> dict:
@@ -74,7 +82,7 @@ def deflect( ticket_text: str, top_k: int = 3, strong_threshold: float = 0.72, w
         checked, and (for STRONG_MATCH/WEAK_MATCH) the matched title +
         resolution text.
     """
-    results = kb_collection.query(
+    results = get_collection().query(
         query_texts=[ticket_text],   # collection's own embedding_function handles encoding
         n_results=top_k,
     )
