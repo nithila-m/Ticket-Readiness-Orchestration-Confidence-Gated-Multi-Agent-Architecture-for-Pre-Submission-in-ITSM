@@ -1,10 +1,12 @@
 from functools import lru_cache
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier
+from app.agents.classification_agent import ClassificationAgent
 from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
 from app.providers.gemini_provider import GeminiProvider
+from app.providers.groq_classification_provider import GroqClassificationProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.services.clarification_service import ClarificationService
@@ -44,6 +46,20 @@ def get_kb_deflection_agent() -> KBDeflectionAgent:
     run_kb_retrieval bridge) - only tests override this with a fake.
     """
     return KBDeflectionAgent()
+
+
+@lru_cache
+def get_classification_agent() -> ClassificationAgent:
+    """
+    Builds the real, Groq-backed ClassificationAgent (Agent 5). Cached as a
+    singleton; only instantiated on first actual call, not at app startup,
+    so the app boots without GROQ_API_KEY. Not wired into
+    ClarificationService - the orchestrator / Agent 6 own that call.
+    """
+    provider = GroqClassificationProvider(
+        api_key=settings.groq_api_key, model=settings.classification_groq_model
+    )
+    return ClassificationAgent(provider=provider)
 
 
 @lru_cache

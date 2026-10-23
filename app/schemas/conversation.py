@@ -3,7 +3,7 @@ from typing import Literal
 
 from app.schemas.clarification import ClarificationLogEntry
 from app.schemas.extraction import CategoryPrediction, ExtractedField
-
+from app.schemas.pipeline import CorrelationResult, ClassificationResult, TicketRecord, TerminalOutcome
 
 class Message(BaseModel):
     # "assistant" covers Agent 2's clarifying questions when they're
@@ -49,3 +49,10 @@ class ConversationState(BaseModel):
     kb_matched_kb_id: str | None = None
     kb_matched_title: str | None = None
     kb_offered_resolution: str | None = None
+
+    # --- Agent 4/5/6 + terminal state ---
+    kb_feedback: Literal["RESOLVED", "NOT_RESOLVED"] | None = None
+    correlation: CorrelationResult | None = None
+    classification: ClassificationResult | None = None
+    ticket: TicketRecord | None = None
+    terminal_outcome: TerminalOutcome | None = None
