@@ -119,7 +119,10 @@ def _dataset_category_labels() -> set[str]:
     labels: set[str] = set()
     for data_dir in _TICKET_DATA_DIRS:
         for path in sorted(data_dir.glob("*.json")):
-            for ticket in json.loads(path.read_text(encoding="utf-8")):
+            records = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                continue  # not a ticket list (e.g. agent3_gold_kb.json)
+            for ticket in records:
                 for field in ("true_category", "category_selected"):
                     if ticket.get(field):
                         labels.add(ticket[field])
