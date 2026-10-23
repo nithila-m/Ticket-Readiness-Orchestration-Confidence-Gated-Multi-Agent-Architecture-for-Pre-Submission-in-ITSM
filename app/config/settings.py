@@ -25,8 +25,9 @@ class Settings(BaseSettings):
     # Cosine-similarity cut-offs for deflect()'s three outcomes:
     # >= strong -> STRONG_MATCH (deflect), >= weak -> WEAK_MATCH (Agent 2
     # still runs), below weak -> NO_MATCH. Defaults reproduce deflect()'s
-    # own hardcoded defaults; tune with scripts/sweep_agent3_thresholds.py.
-    kb_strong_threshold: float = 0.72
+    # own hardcoded defaults, except strong: 0.64 was chosen from
+    # results/agent3_eval.md (best accuracy, Agent 1 category filter).
+    kb_strong_threshold: float = 0.64
     kb_weak_threshold: float = 0.45
 
     # --- Agent 5 (Classify, Prioritise, Explain) ---
