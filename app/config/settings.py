@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     # --- Agent 4 (Correlation Engine: duplicates + incident clusters) ---
     # Cosine similarity at/above which the best open ticket is a duplicate.
-    corr_dup_threshold: float = 0.85
+    # 0.95 and the 0.70 cluster threshold were chosen from results/agent4_eval.md
+    # (synthetic labels; free-text proxy query, see that report).
+    corr_dup_threshold: float = 0.95
     # Similarity at/above which an open ticket counts towards a cluster.
     corr_cluster_threshold: float = 0.70
     # Tickets needed for an incident cluster, INCLUDING the incoming one
