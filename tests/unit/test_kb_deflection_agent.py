@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.agents import kb_deflection_agent
@@ -96,6 +98,19 @@ async def test_check_passes_query_and_category_to_retrieve_fn():
     assert calls == [("symptom: x", "wifi_internet")]
     assert result.outcome == "STRONG_MATCH"
 
+
+async def test_check_returns_no_match_when_retrieval_raises(caplog):
+    def broken_retrieve(query_text, category):
+        raise RuntimeError("chroma unavailable")
+
+    with caplog.at_level(logging.ERROR, logger=kb_deflection_agent.__name__):
+        result = await KBDeflectionAgent(retrieve_fn=broken_retrieve).check("q", "ms_teams")
+
+    assert result.outcome == "NO_MATCH"
+    assert result.similarity_score == 0.0
+    assert result.articles_checked == []
+    assert result.matched_kb_id is None
+    assert "chroma unavailable" in caplog.text
 
 
 # --- run_kb_retrieval -> deflect() ---------------------------------------------

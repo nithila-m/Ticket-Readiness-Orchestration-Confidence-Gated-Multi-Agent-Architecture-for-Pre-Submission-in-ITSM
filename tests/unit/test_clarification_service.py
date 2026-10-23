@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.agents.kb_deflection_agent import KBRetrievalResult
+from app.agents.kb_deflection_agent import KBDeflectionAgent, KBRetrievalResult
 from app.config.settings import settings
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.schemas.analysis import AnalysisResult
@@ -284,3 +284,20 @@ async def test_below_completeness_gate_skips_kb_agent(
     assert state.kb_outcome is None
     fake_clarifier.decide.assert_called_once()
 
+
+@pytest.mark.asyncio
+async def test_kb_retrieval_failure_falls_through_to_agent2(
+    fake_extraction_service, fake_clarifier, repository
+):
+    def broken_retrieve(query_text, category):
+        raise RuntimeError("embedding model failed to load")
+
+    kb_agent = KBDeflectionAgent(retrieve_fn=broken_retrieve)
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository, kb_agent)
+
+    state, decision = await service.handle_message("conv-1", "Teams isn't working.")
+
+    assert state.kb_outcome == "NO_MATCH"
+    assert state.kb_similarity_score == 0.0
+    assert decision.action == "ASK_CLARIFICATION"
+    fake_clarifier.decide.assert_called_once()

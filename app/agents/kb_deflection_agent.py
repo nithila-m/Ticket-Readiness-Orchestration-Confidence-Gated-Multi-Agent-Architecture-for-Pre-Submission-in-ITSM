@@ -9,6 +9,7 @@ place so it doesn't drift.
 """
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import Callable, Literal, NamedTuple
@@ -24,6 +25,8 @@ if str(_TRO_CODES_DIR) not in sys.path:
 
 from agents.kb_retrieval_agent import deflect as _deflect  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
 
 class KBRetrievalResult(NamedTuple):
     outcome: Literal["STRONG_MATCH", "WEAK_MATCH", "NO_MATCH"]
@@ -33,6 +36,15 @@ class KBRetrievalResult(NamedTuple):
     matched_title: str | None
     offered_resolution: str | None
 
+
+NO_MATCH_RESULT = KBRetrievalResult(
+    outcome="NO_MATCH",
+    similarity_score=0.0,
+    articles_checked=[],
+    matched_kb_id=None,
+    matched_title=None,
+    offered_resolution=None,
+)
 
 
 def build_kb_query(category: str | None, extracted_fields: dict[str, ExtractedField]) -> str:
@@ -122,4 +134,11 @@ class KBDeflectionAgent:
         self._retrieve_fn = retrieve_fn
 
     async def check(self, query_text: str, category: str | None) -> KBRetrievalResult:
-        return await asyncio.to_thread(self._retrieve_fn, query_text, category)
+        # Retrieval is an optional shortcut, not a required step: if Chroma
+        # or the embedding model fails, log it and report NO_MATCH so the
+        # turn falls through to Agent 2 instead of surfacing as a 500.
+        try:
+            return await asyncio.to_thread(self._retrieve_fn, query_text, category)
+        except Exception:
+            logger.exception("Agent 3 KB retrieval failed; treating as NO_MATCH")
+            return NO_MATCH_RESULT
