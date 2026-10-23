@@ -27,8 +27,8 @@ Hard negatives: 15; background tickets (FP check only): 122.
 
 | building | dup t | cluster t | DUPLICATE P / R / F1 | INCIDENT_CLUSTER P / R / F1 | hard-neg FP rate | background FP rate |
 |---|---|---|---|---|---|---|
-| known | 0.85 | 0.70 | 0.26 / 1.00 / 0.42 | 1.00 / 0.50 / 0.67 | 0.07 | 0.00 |
-| unknown | 0.85 | 0.70 | 0.19 / 1.00 / 0.31 | 1.00 / 0.55 / 0.71 | 0.20 | 0.05 |
+| known | 0.95 | 0.70 | 0.62 / 1.00 / 0.77 | 1.00 / 0.75 / 0.86 | 0.00 | 0.00 |
+| unknown | 0.95 | 0.70 | 0.62 / 1.00 / 0.77 | 1.00 / 0.75 / 0.86 | 0.00 | 0.00 |
 
 ## Best configurations
 
@@ -47,8 +47,8 @@ Best by duplicate F1, by cluster F1, and by their sum (ties: lower hard-negative
 
 | building | other building | outside window | other category |
 |---|---|---|---|
-| known | 0.00 | 0.20 | 0.00 |
-| unknown | 0.20 | 0.20 | 0.20 |
+| known | 0.00 | 0.00 | 0.00 |
+| unknown | 0.00 | 0.00 | 0.00 |
 
 ## Where the wrong DUPLICATE calls come from (current defaults)
 
@@ -57,15 +57,10 @@ lookback, so near-identical reports of one outage are called duplicates of each 
 
 | building | reason | count |
 |---|---|---|
-| known | cluster member matched a sibling in its own cluster | 7 |
-| known | cluster member matched its cluster's outside-window hard negative | 6 |
-| known | hard_negative_time matched a cluster member | 1 |
-| unknown | cluster member matched a sibling in its own cluster | 7 |
-| unknown | background matched a background ticket | 6 |
-| unknown | cluster member matched its cluster's outside-window hard negative | 6 |
-| unknown | hard_negative_building matched a cluster member | 1 |
-| unknown | hard_negative_time matched a cluster member | 1 |
-| unknown | hard_negative_category matched a background ticket | 1 |
+| known | cluster member matched its cluster's outside-window hard negative | 2 |
+| known | cluster member matched a sibling in its own cluster | 1 |
+| unknown | cluster member matched its cluster's outside-window hard negative | 2 |
+| unknown | cluster member matched a sibling in its own cluster | 1 |
 
 ## Full sweep
 
