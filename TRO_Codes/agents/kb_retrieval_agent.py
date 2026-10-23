@@ -68,6 +68,24 @@ def category_where_filter(category: str | None) -> dict | None:
     return {"category": {"$in": labels}}
 
 
+def search_kb(ticket_text: str, top_k: int = 3, category: str | None = None) -> dict:
+    """
+    Raw Chroma query (ids / distances / metadatas, best match first) with
+    the optional category filter applied. deflect() and the eval scripts
+    share this so they always search exactly the same way.
+    """
+    query_kwargs = {}
+    where = category_where_filter(category)
+    if where is not None:
+        query_kwargs["where"] = where
+
+    return get_collection().query(
+        query_texts=[ticket_text],   # collection's own embedding_function handles encoding
+        n_results=top_k,
+        **query_kwargs,
+    )
+
+
 def deflect(
     ticket_text: str,
     top_k: int = 3,
@@ -113,16 +131,7 @@ def deflect(
         checked, and (for STRONG_MATCH/WEAK_MATCH) the matched title +
         resolution text.
     """
-    query_kwargs = {}
-    where = category_where_filter(category)
-    if where is not None:
-        query_kwargs["where"] = where
-
-    results = get_collection().query(
-        query_texts=[ticket_text],   # collection's own embedding_function handles encoding
-        n_results=top_k,
-        **query_kwargs,
-    )
+    results = search_kb(ticket_text, top_k=top_k, category=category)
 
     # No KB articles in the collection at all — nothing to deflect against.
     if not results["ids"][0]:
