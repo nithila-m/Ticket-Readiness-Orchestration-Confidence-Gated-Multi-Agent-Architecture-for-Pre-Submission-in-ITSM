@@ -62,13 +62,26 @@ VALID_CATEGORIES: list[str] = list(CATEGORY_FIELD_PROFILES.keys())
 
 # Maps the human-readable category labels used in the synthetic dataset
 # (category_selected / true_category) to this codebase's internal keys.
+# The first label listed for each key is its canonical display label;
+# entries after the canonical five are aliases for label drift found in
+# the data ("AD Account Support" in 5 tickets' true_category, "VIT Email"
+# in 3 tickets' true_category and in every email KB article's category).
 CATEGORY_DISPLAY_TO_KEY: dict[str, str] = {
     "Wifi/Internet Support": "wifi_internet",
     "Microsoft Teams Support": "ms_teams",
     "VIT Email Support": "vit_email",
     "AD Account Creation": "ad_account_creation",
     "Printer Support": "printer_support",
+    # aliases
+    "AD Account Support": "ad_account_creation",
+    "VIT Email": "vit_email",
 }
+
+# Reverse lookup, canonical labels only (first label wins, so aliases
+# above never leak back out as a display label).
+CATEGORY_KEY_TO_DISPLAY: dict[str, str] = {}
+for _label, _key in CATEGORY_DISPLAY_TO_KEY.items():
+    CATEGORY_KEY_TO_DISPLAY.setdefault(_key, _label)
 
 
 def normalize_category_label(display_name: str | None) -> str | None:
@@ -82,6 +95,23 @@ def normalize_category_label(display_name: str | None) -> str | None:
     if display_name is None:
         return None
     return CATEGORY_DISPLAY_TO_KEY.get(display_name)
+
+
+def category_key_to_display(category: str | None) -> str | None:
+    """Canonical display label for an internal key, or None if unknown."""
+    if category is None:
+        return None
+    return CATEGORY_KEY_TO_DISPLAY.get(category)
+
+
+def display_labels_for_key(category: str | None) -> list[str]:
+    """
+    Every display label (canonical first, then aliases) that normalizes to
+    `category`. Used for matching stored data that may carry an alias
+    (e.g. KB metadata says "VIT Email"); never use it to pick a label to
+    show - use category_key_to_display() for that.
+    """
+    return [label for label, key in CATEGORY_DISPLAY_TO_KEY.items() if key == category]
 
 
 def get_profile(category: str | None) -> dict[str, float]:

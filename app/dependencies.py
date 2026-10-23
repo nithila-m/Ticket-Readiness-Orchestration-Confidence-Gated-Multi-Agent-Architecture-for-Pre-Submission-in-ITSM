@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier
 from app.agents.classification_agent import ClassificationAgent
+from app.agents.correlation_engine import CorrelationEngine
 from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
@@ -60,6 +61,19 @@ def get_classification_agent() -> ClassificationAgent:
         api_key=settings.groq_api_key, model=settings.classification_groq_model
     )
     return ClassificationAgent(provider=provider)
+
+
+@lru_cache
+def get_correlation_agent() -> CorrelationEngine:
+    """
+    Builds the real CorrelationEngine (Agent 4). Cached as a singleton; the
+    sentence-transformers model loads lazily on the first check() call, not
+    here and not at app startup. Not wired into ClarificationService - the
+    orchestrator owns that call and supplies the OpenTicketPool
+    (app.agents.seed_ticket_pool.JsonOpenTicketPool until Agent 6's
+    SqliteStore replaces it).
+    """
+    return CorrelationEngine()
 
 
 @lru_cache

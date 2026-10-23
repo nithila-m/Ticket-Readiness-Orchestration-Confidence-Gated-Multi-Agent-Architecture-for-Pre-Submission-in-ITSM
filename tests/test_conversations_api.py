@@ -116,7 +116,7 @@ class StubKBAgent:
         self._result = result
         self.calls = 0
 
-    async def check(self, ticket_text: str) -> KBRetrievalResult:
+    async def check(self, query_text: str, category: str | None) -> KBRetrievalResult:
         self.calls += 1
         return self._result
 

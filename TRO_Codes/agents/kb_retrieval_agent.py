@@ -29,16 +29,70 @@ PREREQUISITE
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_TRO_CODES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = os.path.dirname(_TRO_CODES_DIR)
+sys.path.append(_TRO_CODES_DIR)
+# The display<->key category mapping lives in app/config/category_profiles.py;
+# reuse it rather than keeping a second copy here.
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
 
-from chroma_client1 import get_kb_collection
+from app.config.category_profiles import display_labels_for_key  # noqa: E402
 
-# Loaded once at import time and reused across calls — avoids reopening
-# the persisted client/collection on every single deflect() call.
-kb_collection = get_kb_collection()
+# Opened lazily on the first deflect() call and reused afterwards. Opening
+# at import time made merely importing this module (e.g. during pytest
+# collection) load chromadb + the embedding model and touch chroma_db/.
+_kb_collection = None
 
 
-def deflect( ticket_text: str, top_k: int = 3, strong_threshold: float = 0.72, weak_threshold: float = 0.45,) -> dict:
+def get_collection():
+    global _kb_collection
+    if _kb_collection is None:
+        from chroma_client1 import get_kb_collection
+
+        _kb_collection = get_kb_collection()
+    return _kb_collection
+
+
+def category_where_filter(category: str | None) -> dict | None:
+    """
+    Chroma `where` filter restricting the search to KB articles of one
+    internal category key (e.g. "vit_email"). Matches every display label
+    that maps to the key, aliases included - the email articles' metadata
+    says "VIT Email", not the canonical "VIT Email Support". Returns None
+    (no filter) for None or a key with no KB label, e.g. "general".
+    """
+    labels = display_labels_for_key(category)
+    if not labels:
+        return None
+    return {"category": {"$in": labels}}
+
+
+def search_kb(ticket_text: str, top_k: int = 3, category: str | None = None) -> dict:
+    """
+    Raw Chroma query (ids / distances / metadatas, best match first) with
+    the optional category filter applied. deflect() and the eval scripts
+    share this so they always search exactly the same way.
+    """
+    query_kwargs = {}
+    where = category_where_filter(category)
+    if where is not None:
+        query_kwargs["where"] = where
+
+    return get_collection().query(
+        query_texts=[ticket_text],   # collection's own embedding_function handles encoding
+        n_results=top_k,
+        **query_kwargs,
+    )
+
+
+def deflect(
+    ticket_text: str,
+    top_k: int = 3,
+    category: str | None = None,
+    strong_threshold: float = 0.72,
+    weak_threshold: float = 0.45,
+) -> dict:
     """
     Queries the KB collection for the closest matching article(s) to
     `ticket_text` and classifies the outcome into one of three states:
@@ -59,6 +113,9 @@ def deflect( ticket_text: str, top_k: int = 3, strong_threshold: float = 0.72, w
                       combined the same way tickets were embedded at
                       ingestion time — see prepare_ticket_records()).
         top_k: how many KB candidates to retrieve for logging/audit.
+        category: optional internal category key (e.g. "wifi_internet").
+                   When given, only KB articles of that category are
+                   searched (see category_where_filter). None = search all.
         strong_threshold: minimum cosine similarity required to offer
                            deflection outright. 0.72 is a starting point -
                            validate on your own eval set before trusting
@@ -74,10 +131,7 @@ def deflect( ticket_text: str, top_k: int = 3, strong_threshold: float = 0.72, w
         checked, and (for STRONG_MATCH/WEAK_MATCH) the matched title +
         resolution text.
     """
-    results = kb_collection.query(
-        query_texts=[ticket_text],   # collection's own embedding_function handles encoding
-        n_results=top_k,
-    )
+    results = search_kb(ticket_text, top_k=top_k, category=category)
 
     # No KB articles in the collection at all — nothing to deflect against.
     if not results["ids"][0]:
