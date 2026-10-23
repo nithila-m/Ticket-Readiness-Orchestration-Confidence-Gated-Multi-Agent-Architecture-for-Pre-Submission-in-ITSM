@@ -5,7 +5,7 @@
     "similarity": 0.4751,
     "true_category": "Wifi/Internet Support",
     "subject": "wifi issue",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -16,7 +16,7 @@
     "similarity": 0.6833,
     "true_category": "Wifi/Internet Support",
     "subject": "Laptop wifi drops every few minutes",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-005": {
@@ -25,7 +25,7 @@
     "similarity": 0.7061,
     "true_category": "Wifi/Internet Support",
     "subject": "Have to reconnect to wifi every time I open my laptop",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-006": {
@@ -34,7 +34,7 @@
     "similarity": 0.3872,
     "true_category": "Wifi/Internet Support",
     "subject": "no internet here",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -45,7 +45,7 @@
     "similarity": 0.5349,
     "true_category": "Wifi/Internet Support",
     "subject": "Video calls keep freezing, wifi drops mid-call",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-011": {
@@ -54,7 +54,7 @@
     "similarity": 0.5013,
     "true_category": "Wifi/Internet Support",
     "subject": "Phone won't join VIT WiFi 5GHz, works fine on 2.4GHz",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-013": {
@@ -63,7 +63,7 @@
     "similarity": 0.6966,
     "true_category": "Wifi/Internet Support",
     "subject": "wifi keeps disconnecting",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-015": {
@@ -72,7 +72,7 @@
     "similarity": 0.5736,
     "true_category": "Wifi/Internet Support",
     "subject": "Very slow internet since morning",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-019": {
@@ -81,7 +81,7 @@
     "similarity": 0.4005,
     "true_category": "Wifi/Internet Support",
     "subject": "Internet down, need help please",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -92,7 +92,7 @@
     "similarity": 0.6578,
     "true_category": "Wifi/Internet Support",
     "subject": "Connects to wifi but says no internet access",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-023": {
@@ -101,7 +101,7 @@
     "similarity": 0.6004,
     "true_category": "Wifi/Internet Support",
     "subject": "Phone drops wifi every few minutes since yesterday",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-024": {
@@ -110,7 +110,7 @@
     "similarity": 0.5444,
     "true_category": "Wifi/Internet Support",
     "subject": "cant connect to wifi at all",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-026": {
@@ -119,7 +119,7 @@
     "similarity": 0.6461,
     "true_category": "Wifi/Internet Support",
     "subject": "Wifi gets really slow every evening",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "WIFI-028": {
@@ -128,7 +128,7 @@
     "similarity": 0.4596,
     "true_category": "VIT Email Support",
     "subject": "wifi problem, cant send mails",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -139,7 +139,7 @@
     "similarity": 0.4584,
     "true_category": "Wifi/Internet Support",
     "subject": "Lost wifi after windows update",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -150,7 +150,7 @@
     "similarity": 0.7166,
     "true_category": "Microsoft Teams Support",
     "subject": "Can't hear audio in Teams meetings",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-003": {
@@ -159,7 +159,7 @@
     "similarity": 0.7824,
     "true_category": "Microsoft Teams Support",
     "subject": "Video not showing up in meetings",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-004": {
@@ -168,7 +168,7 @@
     "similarity": 0.6995,
     "true_category": "VIT Email Support",
     "subject": "Can't log into Teams",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "category_mismatch"
     ],
@@ -184,7 +184,7 @@
     "similarity": 0.5868,
     "true_category": "Microsoft Teams Support",
     "subject": "Audio dropped for whole class in Teams meeting",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-009": {
@@ -193,7 +193,7 @@
     "similarity": 0.4844,
     "true_category": "Microsoft Teams Support",
     "subject": "No sound in today's class meeting",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -204,7 +204,7 @@
     "similarity": 0.5983,
     "true_category": "Microsoft Teams Support",
     "subject": "teams audio gone",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-012": {
@@ -213,7 +213,7 @@
     "similarity": 0.595,
     "true_category": "Microsoft Teams Support",
     "subject": "Can't join a specific meeting link",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-014": {
@@ -222,7 +222,7 @@
     "similarity": 0.7488,
     "true_category": "Microsoft Teams Support",
     "subject": "Camera shows black screen in meetings",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-016": {
@@ -231,7 +231,7 @@
     "similarity": 0.513,
     "true_category": "Microsoft Teams Support",
     "subject": "teams problem",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-021": {
@@ -240,7 +240,7 @@
     "similarity": 0.5242,
     "true_category": "Microsoft Teams Support",
     "subject": "Can't hear others but they can hear me",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-022": {
@@ -249,7 +249,7 @@
     "similarity": 0.6625,
     "true_category": "Microsoft Teams Support",
     "subject": "Meeting link expired error",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-023": {
@@ -258,7 +258,7 @@
     "similarity": 0.6944,
     "true_category": "VIT Email Support",
     "subject": "cant login to teams",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "category_mismatch"
     ],
@@ -274,7 +274,7 @@
     "similarity": 0.4545,
     "true_category": "Microsoft Teams Support",
     "subject": "teams glitchy",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -285,7 +285,7 @@
     "similarity": 0.6451,
     "true_category": "Microsoft Teams Support",
     "subject": "Can join meetings but not the recurring team channel call",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "TEAMS-028": {
@@ -294,7 +294,7 @@
     "similarity": 0.6462,
     "true_category": "VIT Email Support",
     "subject": "Teams sign in stuck loading",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "category_mismatch"
     ],
@@ -310,7 +310,7 @@
     "similarity": 0.8306,
     "true_category": "Microsoft Teams Support",
     "subject": "Notifications not showing up for new messages",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-002": {
@@ -319,7 +319,7 @@
     "similarity": 0.4601,
     "true_category": "VIT Email Support",
     "subject": "Can't send emails with attachments",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -330,7 +330,7 @@
     "similarity": 0.7025,
     "true_category": "VIT Email Support",
     "subject": "Mailbox full, can't receive new mail",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-004": {
@@ -339,7 +339,7 @@
     "similarity": 0.5547,
     "true_category": "AD Account Support",
     "subject": "email not opening",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-011": {
@@ -348,7 +348,7 @@
     "similarity": 0.8285,
     "true_category": "VIT Email Support",
     "subject": "Auto-forwarding rule not working",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-012": {
@@ -357,7 +357,7 @@
     "similarity": 0.5188,
     "true_category": "VIT Email Support",
     "subject": "Signature not showing up on sent mail",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-014": {
@@ -366,7 +366,7 @@
     "similarity": 0.777,
     "true_category": "VIT Email Support",
     "subject": "Password reset link expired immediately",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "category_mismatch"
     ],
@@ -382,7 +382,7 @@
     "similarity": 0.5384,
     "true_category": "VIT Email Support",
     "subject": "email acting weird",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-021": {
@@ -391,7 +391,7 @@
     "similarity": 0.6691,
     "true_category": "VIT Email Support",
     "subject": "Old emails disappeared from inbox",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-022": {
@@ -400,7 +400,7 @@
     "similarity": 0.5573,
     "true_category": "VIT Email Support",
     "subject": "Can't add my VIT email to phone",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-023": {
@@ -409,7 +409,7 @@
     "similarity": 0.444,
     "true_category": "Microsoft Teams Support",
     "subject": "email keeps opening a call window",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -420,7 +420,7 @@
     "similarity": 0.4116,
     "true_category": "VIT Email Support",
     "subject": "email glitchy today",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -431,7 +431,7 @@
     "similarity": 0.5177,
     "true_category": "VIT Email Support",
     "subject": "Can log in but one folder won't load",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-028": {
@@ -440,7 +440,7 @@
     "similarity": 0.5045,
     "true_category": "AD Account Support",
     "subject": "email login just spins then fails",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "EMAIL-030": {
@@ -449,7 +449,7 @@
     "similarity": 0.473,
     "true_category": "VIT Email Support",
     "subject": "Not getting notification sounds for new mail",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -460,7 +460,7 @@
     "similarity": 0.6751,
     "true_category": "AD Account Creation",
     "subject": "locked out cant login",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-002": {
@@ -469,7 +469,7 @@
     "similarity": 0.5446,
     "true_category": "AD Account Creation",
     "subject": "New account not active yet",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-006": {
@@ -478,7 +478,7 @@
     "similarity": 0.727,
     "true_category": "AD Account Creation",
     "subject": "password expired need reset",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-010": {
@@ -487,7 +487,7 @@
     "similarity": 0.6313,
     "true_category": "AD Account Creation",
     "subject": "locked myself out, need unlock",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-012": {
@@ -496,7 +496,7 @@
     "similarity": 0.6476,
     "true_category": "AD Account Creation",
     "subject": "forgot my login id",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-015": {
@@ -505,7 +505,7 @@
     "similarity": 0.6986,
     "true_category": "AD Account Creation",
     "subject": "reset link expired",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-019": {
@@ -514,7 +514,7 @@
     "similarity": 0.6764,
     "true_category": "AD Account Creation",
     "subject": "dont remember username format",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-023": {
@@ -523,7 +523,7 @@
     "similarity": 0.534,
     "true_category": "AD Account Creation",
     "subject": "Temporary lockout, just confirming",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-025": {
@@ -532,7 +532,7 @@
     "similarity": 0.5336,
     "true_category": "AD Account Creation",
     "subject": "self reset not sending otp",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-028": {
@@ -541,7 +541,7 @@
     "similarity": 0.5972,
     "true_category": "AD Account Creation",
     "subject": "password reset help",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "ADA-029": {
@@ -550,7 +550,7 @@
     "similarity": 0.7975,
     "true_category": "VIT Email",
     "subject": "AD works but old mail missing after account merge",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "category_mismatch"
     ],
@@ -566,7 +566,7 @@
     "similarity": 0.7189,
     "true_category": "Printer Support",
     "subject": "HP LaserJet showing offline",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-004": {
@@ -575,7 +575,7 @@
     "similarity": 0.6509,
     "true_category": "Printer Support",
     "subject": "print quality gone bad",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-006": {
@@ -584,7 +584,7 @@
     "similarity": 0.6679,
     "true_category": "Printer Support",
     "subject": "spooler stuck",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-007": {
@@ -593,7 +593,7 @@
     "similarity": 0.5477,
     "true_category": "Printer Support",
     "subject": "printing super slow",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-009": {
@@ -602,7 +602,7 @@
     "similarity": 0.7862,
     "true_category": "Printer Support",
     "subject": "printer eating pages",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-011": {
@@ -611,7 +611,7 @@
     "similarity": 0.8458,
     "true_category": "Printer Support",
     "subject": "Wireless printer dropped from network after Wi-Fi update",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-014": {
@@ -620,7 +620,7 @@
     "similarity": 0.7424,
     "true_category": "Printer Support",
     "subject": "toner low warning but prints are blank",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-016": {
@@ -629,7 +629,7 @@
     "similarity": 0.789,
     "true_category": "Printer Support",
     "subject": "Driver seems corrupted after Windows update",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-017": {
@@ -638,7 +638,7 @@
     "similarity": 0.8982,
     "true_category": "Printer Support",
     "subject": "double sided printing not working",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-018": {
@@ -647,7 +647,7 @@
     "similarity": 0.8158,
     "true_category": "Printer Support",
     "subject": "weird lines across every printout",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   },
   "PRN-020": {
@@ -656,7 +656,7 @@
     "similarity": 0.3302,
     "true_category": "Printer Support",
     "subject": "printer asking for a code i dont have",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -667,7 +667,7 @@
     "similarity": 0.4324,
     "true_category": "Printer Support",
     "subject": "colors printing wrong",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": [
       "low_similarity"
     ]
@@ -678,7 +678,7 @@
     "similarity": 0.658,
     "true_category": "Printer Support",
     "subject": "extra blank page after every print",
-    "source": "proposed",
+    "source": "confirmed",
     "flags": []
   }
 }
