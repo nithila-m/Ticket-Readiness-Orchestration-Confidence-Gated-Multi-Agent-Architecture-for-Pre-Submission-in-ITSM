@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.agents.kb_deflection_agent import KBRetrievalResult
+from app.config.settings import settings
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.schemas.analysis import AnalysisResult
 from app.schemas.clarification import ClarificationDecision
@@ -252,3 +253,34 @@ async def test_weak_kb_match_still_calls_agent2(
     assert state.kb_outcome == "WEAK_MATCH"
     assert decision.action == "ASK_CLARIFICATION"  # unchanged: fake_clarifier's default
     fake_clarifier.decide.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_kb_agent_receives_structured_query_and_category_key_not_transcript(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository
+):
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository, fake_kb_agent)
+
+    await service.handle_message("conv-1", "Teams isn't working.")
+
+    query_text, category = fake_kb_agent.check.call_args.args
+    assert query_text == "failure_type: audio\nCategory: Microsoft Teams Support"
+    assert category == "ms_teams"
+    assert "User:" not in query_text
+
+
+@pytest.mark.asyncio
+async def test_below_completeness_gate_skips_kb_agent(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository
+):
+    fake_extraction_service.analyze.return_value = _make_analysis_result(
+        completeness=settings.kb_gate_completeness_threshold - 0.01
+    )
+    service = ClarificationService(fake_extraction_service, fake_clarifier, repository, fake_kb_agent)
+
+    state, decision = await service.handle_message("conv-1", "Teams isn't working.")
+
+    fake_kb_agent.check.assert_not_called()
+    assert state.kb_outcome is None
+    fake_clarifier.decide.assert_called_once()
+
