@@ -11,7 +11,11 @@ propagate to the API layer rather than being silently masked here.
 """
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier
-from app.agents.kb_deflection_agent import KBDeflectionAgent, build_deflection_decision
+from app.agents.kb_deflection_agent import (
+    KBDeflectionAgent,
+    build_deflection_decision,
+    build_kb_query,
+)
 from app.config.settings import settings
 from app.repositories.base import ConversationRepository
 from app.schemas.clarification import ClarificationDecision, ClarificationLogEntry
@@ -59,7 +63,9 @@ class ClarificationService:
         #      turn) and we go straight to Agent 2, same as before Agent 3
         #      existed.
         if state.completeness_score >= settings.kb_gate_completeness_threshold:
-            kb_result = await self._kb_agent.check(transcript)
+            category = state.detected_category.value if state.detected_category else None
+            kb_query = build_kb_query(category, state.extracted_fields)
+            kb_result = await self._kb_agent.check(kb_query, category)
             state.kb_outcome = kb_result.outcome
             state.kb_similarity_score = kb_result.similarity_score
             state.kb_articles_checked = kb_result.articles_checked

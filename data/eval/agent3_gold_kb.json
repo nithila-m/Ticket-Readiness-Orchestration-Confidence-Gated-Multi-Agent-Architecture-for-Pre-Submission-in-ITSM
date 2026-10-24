@@ -1,0 +1,684 @@
+{
+  "WIFI-001": {
+    "kb_id": "KB0308",
+    "kb_title": "Wi-Fi works on phone but not on laptop in same room",
+    "similarity": 0.4751,
+    "true_category": "Wifi/Internet Support",
+    "subject": "wifi issue",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "WIFI-003": {
+    "kb_id": "KB0302",
+    "kb_title": "Wi-Fi disconnects repeatedly after device wakes from sleep",
+    "similarity": 0.6833,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Laptop wifi drops every few minutes",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-005": {
+    "kb_id": "KB0302",
+    "kb_title": "Wi-Fi disconnects repeatedly after device wakes from sleep",
+    "similarity": 0.7061,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Have to reconnect to wifi every time I open my laptop",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-006": {
+    "kb_id": "KB0305",
+    "kb_title": "Device shows 'connected, no internet'",
+    "similarity": 0.3872,
+    "true_category": "Wifi/Internet Support",
+    "subject": "no internet here",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "WIFI-007": {
+    "kb_id": "KB0307",
+    "kb_title": "Intermittent Wi-Fi drops affecting multiple users in one area",
+    "similarity": 0.5349,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Video calls keep freezing, wifi drops mid-call",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-011": {
+    "kb_id": "KB0308",
+    "kb_title": "Wi-Fi works on phone but not on laptop in same room",
+    "similarity": 0.5013,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Phone won't join VIT WiFi 5GHz, works fine on 2.4GHz",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-013": {
+    "kb_id": "KB0302",
+    "kb_title": "Wi-Fi disconnects repeatedly after device wakes from sleep",
+    "similarity": 0.6966,
+    "true_category": "Wifi/Internet Support",
+    "subject": "wifi keeps disconnecting",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-015": {
+    "kb_id": "KB0304",
+    "kb_title": "Wi-Fi very slow despite full signal strength",
+    "similarity": 0.5736,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Very slow internet since morning",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-019": {
+    "kb_id": "KB0305",
+    "kb_title": "Device shows 'connected, no internet'",
+    "similarity": 0.4005,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Internet down, need help please",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "WIFI-021": {
+    "kb_id": "KB0305",
+    "kb_title": "Device shows 'connected, no internet'",
+    "similarity": 0.6578,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Connects to wifi but says no internet access",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-023": {
+    "kb_id": "KB0302",
+    "kb_title": "Wi-Fi disconnects repeatedly after device wakes from sleep",
+    "similarity": 0.6004,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Phone drops wifi every few minutes since yesterday",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-024": {
+    "kb_id": "KB0305",
+    "kb_title": "Device shows 'connected, no internet'",
+    "similarity": 0.5444,
+    "true_category": "Wifi/Internet Support",
+    "subject": "cant connect to wifi at all",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-026": {
+    "kb_id": "KB0304",
+    "kb_title": "Wi-Fi very slow despite full signal strength",
+    "similarity": 0.6461,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Wifi gets really slow every evening",
+    "source": "confirmed",
+    "flags": []
+  },
+  "WIFI-028": {
+    "kb_id": "KB0502",
+    "kb_title": "Mailbox storage full, unable to send or receive mail",
+    "similarity": 0.4596,
+    "true_category": "VIT Email Support",
+    "subject": "wifi problem, cant send mails",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "WIFI-030": {
+    "kb_id": "KB0306",
+    "kb_title": "Cannot connect to Wi-Fi with correct password",
+    "similarity": 0.4584,
+    "true_category": "Wifi/Internet Support",
+    "subject": "Lost wifi after windows update",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "TEAMS-002": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.7166,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Can't hear audio in Teams meetings",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-003": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.7824,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Video not showing up in meetings",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-004": {
+    "kb_id": "KB0407",
+    "kb_title": "Teams login fails while other Microsoft apps work fine",
+    "similarity": 0.6995,
+    "true_category": "VIT Email Support",
+    "subject": "Can't log into Teams",
+    "source": "confirmed",
+    "flags": [
+      "category_mismatch"
+    ],
+    "same_category_top1": {
+      "kb_id": "KB0501",
+      "kb_title": "Outlook repeatedly prompts for password without accepting it",
+      "similarity": 0.3198
+    }
+  },
+  "TEAMS-008": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.5868,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Audio dropped for whole class in Teams meeting",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-009": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.4844,
+    "true_category": "Microsoft Teams Support",
+    "subject": "No sound in today's class meeting",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "TEAMS-010": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.5983,
+    "true_category": "Microsoft Teams Support",
+    "subject": "teams audio gone",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-012": {
+    "kb_id": "KB0402",
+    "kb_title": "Scheduled meetings not appearing in Teams calendar",
+    "similarity": 0.595,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Can't join a specific meeting link",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-014": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.7488,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Camera shows black screen in meetings",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-016": {
+    "kb_id": "KB0404",
+    "kb_title": "Cannot join or create Teams channels for a course/team",
+    "similarity": 0.513,
+    "true_category": "Microsoft Teams Support",
+    "subject": "teams problem",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-021": {
+    "kb_id": "KB0403",
+    "kb_title": "Camera or microphone not detected in Teams meetings",
+    "similarity": 0.5242,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Can't hear others but they can hear me",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-022": {
+    "kb_id": "KB0402",
+    "kb_title": "Scheduled meetings not appearing in Teams calendar",
+    "similarity": 0.6625,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Meeting link expired error",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-023": {
+    "kb_id": "KB0407",
+    "kb_title": "Teams login fails while other Microsoft apps work fine",
+    "similarity": 0.6944,
+    "true_category": "VIT Email Support",
+    "subject": "cant login to teams",
+    "source": "confirmed",
+    "flags": [
+      "category_mismatch"
+    ],
+    "same_category_top1": {
+      "kb_id": "KB0501",
+      "kb_title": "Outlook repeatedly prompts for password without accepting it",
+      "similarity": 0.3209
+    }
+  },
+  "TEAMS-026": {
+    "kb_id": "KB0404",
+    "kb_title": "Cannot join or create Teams channels for a course/team",
+    "similarity": 0.4545,
+    "true_category": "Microsoft Teams Support",
+    "subject": "teams glitchy",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "TEAMS-027": {
+    "kb_id": "KB0404",
+    "kb_title": "Cannot join or create Teams channels for a course/team",
+    "similarity": 0.6451,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Can join meetings but not the recurring team channel call",
+    "source": "confirmed",
+    "flags": []
+  },
+  "TEAMS-028": {
+    "kb_id": "KB0401",
+    "kb_title": "Teams stuck on sign-in spinner after correct password entry",
+    "similarity": 0.6462,
+    "true_category": "VIT Email Support",
+    "subject": "Teams sign in stuck loading",
+    "source": "confirmed",
+    "flags": [
+      "category_mismatch"
+    ],
+    "same_category_top1": {
+      "kb_id": "KB0505",
+      "kb_title": "Unable to send emails to external (non-VIT) addresses",
+      "similarity": 0.3295
+    }
+  },
+  "TEAMS-030": {
+    "kb_id": "KB0406",
+    "kb_title": "Teams notifications not appearing despite settings enabled",
+    "similarity": 0.8306,
+    "true_category": "Microsoft Teams Support",
+    "subject": "Notifications not showing up for new messages",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-002": {
+    "kb_id": "KB0502",
+    "kb_title": "Mailbox storage full, unable to send or receive mail",
+    "similarity": 0.4601,
+    "true_category": "VIT Email Support",
+    "subject": "Can't send emails with attachments",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "EMAIL-003": {
+    "kb_id": "KB0502",
+    "kb_title": "Mailbox storage full, unable to send or receive mail",
+    "similarity": 0.7025,
+    "true_category": "VIT Email Support",
+    "subject": "Mailbox full, can't receive new mail",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-004": {
+    "kb_id": "KB0101",
+    "kb_title": "Account locked out after multiple failed login attempts",
+    "similarity": 0.5547,
+    "true_category": "AD Account Support",
+    "subject": "email not opening",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-011": {
+    "kb_id": "KB0508",
+    "kb_title": "Auto-forwarding or rules not working as configured",
+    "similarity": 0.8285,
+    "true_category": "VIT Email Support",
+    "subject": "Auto-forwarding rule not working",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-012": {
+    "kb_id": "KB0506",
+    "kb_title": "Mail not syncing on mobile device",
+    "similarity": 0.5188,
+    "true_category": "VIT Email Support",
+    "subject": "Signature not showing up on sent mail",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-014": {
+    "kb_id": "KB0104",
+    "kb_title": "Password reset link expired before use",
+    "similarity": 0.777,
+    "true_category": "VIT Email Support",
+    "subject": "Password reset link expired immediately",
+    "source": "confirmed",
+    "flags": [
+      "category_mismatch"
+    ],
+    "same_category_top1": {
+      "kb_id": "KB0501",
+      "kb_title": "Outlook repeatedly prompts for password without accepting it",
+      "similarity": 0.426
+    }
+  },
+  "EMAIL-016": {
+    "kb_id": "KB0503",
+    "kb_title": "Legitimate emails going to Junk/Spam folder",
+    "similarity": 0.5384,
+    "true_category": "VIT Email Support",
+    "subject": "email acting weird",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-021": {
+    "kb_id": "KB0504",
+    "kb_title": "Old emails missing after account merge or migration",
+    "similarity": 0.6691,
+    "true_category": "VIT Email Support",
+    "subject": "Old emails disappeared from inbox",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-022": {
+    "kb_id": "KB0506",
+    "kb_title": "Mail not syncing on mobile device",
+    "similarity": 0.5573,
+    "true_category": "VIT Email Support",
+    "subject": "Can't add my VIT email to phone",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-023": {
+    "kb_id": "KB0407",
+    "kb_title": "Teams login fails while other Microsoft apps work fine",
+    "similarity": 0.444,
+    "true_category": "Microsoft Teams Support",
+    "subject": "email keeps opening a call window",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "EMAIL-026": {
+    "kb_id": "KB0507",
+    "kb_title": "Shared/departmental mailbox not accessible",
+    "similarity": 0.4116,
+    "true_category": "VIT Email Support",
+    "subject": "email glitchy today",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "EMAIL-027": {
+    "kb_id": "KB0506",
+    "kb_title": "Mail not syncing on mobile device",
+    "similarity": 0.5177,
+    "true_category": "VIT Email Support",
+    "subject": "Can log in but one folder won't load",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-028": {
+    "kb_id": "KB0101",
+    "kb_title": "Account locked out after multiple failed login attempts",
+    "similarity": 0.5045,
+    "true_category": "AD Account Support",
+    "subject": "email login just spins then fails",
+    "source": "confirmed",
+    "flags": []
+  },
+  "EMAIL-030": {
+    "kb_id": "KB0502",
+    "kb_title": "Mailbox storage full, unable to send or receive mail",
+    "similarity": 0.473,
+    "true_category": "VIT Email Support",
+    "subject": "Not getting notification sounds for new mail",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "ADA-001": {
+    "kb_id": "KB0101",
+    "kb_title": "Account locked out after multiple failed login attempts",
+    "similarity": 0.6751,
+    "true_category": "AD Account Creation",
+    "subject": "locked out cant login",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-002": {
+    "kb_id": "KB0105",
+    "kb_title": "New employee/contractor account stuck in 'pending HR approval'",
+    "similarity": 0.5446,
+    "true_category": "AD Account Creation",
+    "subject": "New account not active yet",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-006": {
+    "kb_id": "KB0103",
+    "kb_title": "Password expired / forced reset on login",
+    "similarity": 0.727,
+    "true_category": "AD Account Creation",
+    "subject": "password expired need reset",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-010": {
+    "kb_id": "KB0101",
+    "kb_title": "Account locked out after multiple failed login attempts",
+    "similarity": 0.6313,
+    "true_category": "AD Account Creation",
+    "subject": "locked myself out, need unlock",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-012": {
+    "kb_id": "KB0107",
+    "kb_title": "Forgotten AD username/login ID format",
+    "similarity": 0.6476,
+    "true_category": "AD Account Creation",
+    "subject": "forgot my login id",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-015": {
+    "kb_id": "KB0104",
+    "kb_title": "Password reset link expired before use",
+    "similarity": 0.6986,
+    "true_category": "AD Account Creation",
+    "subject": "reset link expired",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-019": {
+    "kb_id": "KB0107",
+    "kb_title": "Forgotten AD username/login ID format",
+    "similarity": 0.6764,
+    "true_category": "AD Account Creation",
+    "subject": "dont remember username format",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-023": {
+    "kb_id": "KB0101",
+    "kb_title": "Account locked out after multiple failed login attempts",
+    "similarity": 0.534,
+    "true_category": "AD Account Creation",
+    "subject": "Temporary lockout, just confirming",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-025": {
+    "kb_id": "KB0104",
+    "kb_title": "Password reset link expired before use",
+    "similarity": 0.5336,
+    "true_category": "AD Account Creation",
+    "subject": "self reset not sending otp",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-028": {
+    "kb_id": "KB0103",
+    "kb_title": "Password expired / forced reset on login",
+    "similarity": 0.5972,
+    "true_category": "AD Account Creation",
+    "subject": "password reset help",
+    "source": "confirmed",
+    "flags": []
+  },
+  "ADA-029": {
+    "kb_id": "KB0108",
+    "kb_title": "Old mailbox data missing after account merge/migration",
+    "similarity": 0.7975,
+    "true_category": "VIT Email",
+    "subject": "AD works but old mail missing after account merge",
+    "source": "confirmed",
+    "flags": [
+      "category_mismatch"
+    ],
+    "same_category_top1": {
+      "kb_id": "KB0504",
+      "kb_title": "Old emails missing after account merge or migration",
+      "similarity": 0.7481
+    }
+  },
+  "PRN-002": {
+    "kb_id": "KB0201",
+    "kb_title": "Printer showing 'Offline' despite being powered on",
+    "similarity": 0.7189,
+    "true_category": "Printer Support",
+    "subject": "HP LaserJet showing offline",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-004": {
+    "kb_id": "KB0204",
+    "kb_title": "Faded, streaky, or blank printouts",
+    "similarity": 0.6509,
+    "true_category": "Printer Support",
+    "subject": "print quality gone bad",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-006": {
+    "kb_id": "KB0203",
+    "kb_title": "Print jobs stuck in queue, nothing prints",
+    "similarity": 0.6679,
+    "true_category": "Printer Support",
+    "subject": "spooler stuck",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-007": {
+    "kb_id": "KB0206",
+    "kb_title": "Repeated paper jams on same printer",
+    "similarity": 0.5477,
+    "true_category": "Printer Support",
+    "subject": "printing super slow",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-009": {
+    "kb_id": "KB0206",
+    "kb_title": "Repeated paper jams on same printer",
+    "similarity": 0.7862,
+    "true_category": "Printer Support",
+    "subject": "printer eating pages",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-011": {
+    "kb_id": "KB0205",
+    "kb_title": "Wireless printer disappears from network after Wi-Fi maintenance",
+    "similarity": 0.8458,
+    "true_category": "Printer Support",
+    "subject": "Wireless printer dropped from network after Wi-Fi update",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-014": {
+    "kb_id": "KB0204",
+    "kb_title": "Faded, streaky, or blank printouts",
+    "similarity": 0.7424,
+    "true_category": "Printer Support",
+    "subject": "toner low warning but prints are blank",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-016": {
+    "kb_id": "KB0202",
+    "kb_title": "Print spooler service won't start (Error 1068)",
+    "similarity": 0.789,
+    "true_category": "Printer Support",
+    "subject": "Driver seems corrupted after Windows update",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-017": {
+    "kb_id": "KB0207",
+    "kb_title": "Duplex (double-sided) printing not working",
+    "similarity": 0.8982,
+    "true_category": "Printer Support",
+    "subject": "double sided printing not working",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-018": {
+    "kb_id": "KB0208",
+    "kb_title": "Vertical lines or streaks on every printout",
+    "similarity": 0.8158,
+    "true_category": "Printer Support",
+    "subject": "weird lines across every printout",
+    "source": "confirmed",
+    "flags": []
+  },
+  "PRN-020": {
+    "kb_id": "KB0202",
+    "kb_title": "Print spooler service won't start (Error 1068)",
+    "similarity": 0.3302,
+    "true_category": "Printer Support",
+    "subject": "printer asking for a code i dont have",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "PRN-022": {
+    "kb_id": "KB0204",
+    "kb_title": "Faded, streaky, or blank printouts",
+    "similarity": 0.4324,
+    "true_category": "Printer Support",
+    "subject": "colors printing wrong",
+    "source": "confirmed",
+    "flags": [
+      "low_similarity"
+    ]
+  },
+  "PRN-030": {
+    "kb_id": "KB0206",
+    "kb_title": "Repeated paper jams on same printer",
+    "similarity": 0.658,
+    "true_category": "Printer Support",
+    "subject": "extra blank page after every print",
+    "source": "confirmed",
+    "flags": []
+  }
+}

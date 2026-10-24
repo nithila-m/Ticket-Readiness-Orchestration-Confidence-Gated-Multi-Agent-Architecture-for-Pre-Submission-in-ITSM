@@ -9,17 +9,23 @@ place so it doesn't drift.
 """
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import Callable, Literal, NamedTuple
 
+from app.config.category_profiles import category_key_to_display
+from app.config.settings import settings
 from app.schemas.clarification import ClarificationDecision
+from app.schemas.extraction import ExtractedField
 
 _TRO_CODES_DIR = Path(__file__).resolve().parent.parent.parent / "TRO_Codes"
 if str(_TRO_CODES_DIR) not in sys.path:
     sys.path.insert(0, str(_TRO_CODES_DIR))
 
 from agents.kb_retrieval_agent import deflect as _deflect  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 class KBRetrievalResult(NamedTuple):
@@ -31,13 +37,52 @@ class KBRetrievalResult(NamedTuple):
     offered_resolution: str | None
 
 
-def run_kb_retrieval(ticket_text: str) -> KBRetrievalResult:
+NO_MATCH_RESULT = KBRetrievalResult(
+    outcome="NO_MATCH",
+    similarity_score=0.0,
+    articles_checked=[],
+    matched_kb_id=None,
+    matched_title=None,
+    offered_resolution=None,
+)
+
+
+def build_kb_query(category: str | None, extracted_fields: dict[str, ExtractedField]) -> str:
+    """
+    Builds the retrieval query from Agent 1's structured output instead of
+    the speaker-labelled multi-turn transcript. KB articles are embedded as
+    plain "title. symptoms" text (TRO_Codes/kb_insertion.py), so a short,
+    description-shaped query compares like with like; the raw transcript
+    adds "User:"/"Assistant asked:" framing that gets noisier every turn.
+
+    One "field: value" line per non-null field, then a "Category: <label>"
+    line using the canonical display label (a sentence-transformer embeds
+    "Wifi/Internet Support" more meaningfully than "wifi_internet").
+    An unknown key is used as-is; None adds no category line.
+    """
+    lines = [
+        f"{name}: {field.value}"
+        for name, field in extracted_fields.items()
+        if field.value is not None
+    ]
+    if category:
+        lines.append(f"Category: {category_key_to_display(category) or category}")
+    return "\n".join(lines)
+
+
+def run_kb_retrieval(query_text: str, category: str | None = None) -> KBRetrievalResult:
     """
     Synchronous wrapper around TRO_Codes' deflect(). Kept synchronous on
     purpose (matches the underlying chromadb client) - KBDeflectionAgent
     below is what offloads this onto a thread for async callers.
+    Thresholds come from settings, so TRO_Codes/ never reads app/ config.
     """
-    raw = _deflect(ticket_text)
+    raw = _deflect(
+        query_text,
+        category=category,
+        strong_threshold=settings.kb_strong_threshold,
+        weak_threshold=settings.kb_weak_threshold,
+    )
     return KBRetrievalResult(
         outcome=raw["outcome"],
         similarity_score=raw.get("resolution_confidence", 0.0),
@@ -82,8 +127,18 @@ class KBDeflectionAgent:
     the real chromadb-backed collection.
     """
 
-    def __init__(self, retrieve_fn: Callable[[str], KBRetrievalResult] = run_kb_retrieval):
+    def __init__(
+        self,
+        retrieve_fn: Callable[[str, str | None], KBRetrievalResult] = run_kb_retrieval,
+    ):
         self._retrieve_fn = retrieve_fn
 
-    async def check(self, ticket_text: str) -> KBRetrievalResult:
-        return await asyncio.to_thread(self._retrieve_fn, ticket_text)
+    async def check(self, query_text: str, category: str | None) -> KBRetrievalResult:
+        # Retrieval is an optional shortcut, not a required step: if Chroma
+        # or the embedding model fails, log it and report NO_MATCH so the
+        # turn falls through to Agent 2 instead of surfacing as a 500.
+        try:
+            return await asyncio.to_thread(self._retrieve_fn, query_text, category)
+        except Exception:
+            logger.exception("Agent 3 KB retrieval failed; treating as NO_MATCH")
+            return NO_MATCH_RESULT

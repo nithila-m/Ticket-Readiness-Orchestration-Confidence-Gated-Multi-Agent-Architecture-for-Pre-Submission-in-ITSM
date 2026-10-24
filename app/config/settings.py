@@ -22,6 +22,31 @@ class Settings(BaseSettings):
     # a bare "wifi not working" could coincidentally sit close to some KB
     # article by wording alone) - defer to Agent 2 clarifying first.
     kb_gate_completeness_threshold: float = 0.5
+    # Cosine-similarity cut-offs for deflect()'s three outcomes:
+    # >= strong -> STRONG_MATCH (deflect), >= weak -> WEAK_MATCH (Agent 2
+    # still runs), below weak -> NO_MATCH. Defaults reproduce deflect()'s
+    # own hardcoded defaults, except strong: 0.64 was chosen from
+    # results/agent3_eval.md (best accuracy, Agent 1 category filter).
+    kb_strong_threshold: float = 0.64
+    kb_weak_threshold: float = 0.45
+
+    # --- Agent 4 (Correlation Engine: duplicates + incident clusters) ---
+    # Cosine similarity at/above which the best open ticket is a duplicate.
+    # 0.95 and the 0.70 cluster threshold were chosen from results/agent4_eval.md
+    # (synthetic labels; free-text proxy query, see that report).
+    corr_dup_threshold: float = 0.95
+    # Similarity at/above which an open ticket counts towards a cluster.
+    corr_cluster_threshold: float = 0.70
+    # Tickets needed for an incident cluster, INCLUDING the incoming one
+    # (so 3 = the new ticket + at least 2 matching open tickets).
+    corr_cluster_min_count: int = 3
+    corr_cluster_window_hours: float = 6
+    corr_lookback_hours: float = 72
+    # Category is a scoring signal, not a filter (Agent 4 runs before
+    # Agent 5): agreement adds this bonus; a cross-category duplicate needs
+    # raw similarity >= corr_cross_category_dup_threshold.
+    corr_category_agreement_bonus: float = 0.05
+    corr_cross_category_dup_threshold: float = 0.95
 
     # --- Agent 5 (Classify, Prioritise, Explain) ---
     # Empty = use groq_model (resolved in _default_classification_model), so

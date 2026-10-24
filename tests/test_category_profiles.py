@@ -1,9 +1,20 @@
+import json
+from pathlib import Path
+
+import pytest
+
 from app.config.category_profiles import (
+    CATEGORY_DISPLAY_TO_KEY,
     CATEGORY_FIELD_PROFILES,
     VALID_CATEGORIES,
+    category_key_to_display,
+    display_labels_for_key,
     get_profile,
     normalize_category_label,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_TICKET_DATA_DIRS = [_REPO_ROOT / "data" / "eval", _REPO_ROOT / "chroma_db" / "data" / "tickets"]
 
 
 def test_all_expected_categories_present():
@@ -77,3 +88,50 @@ def test_normalize_category_label_returns_none_for_unrecognized():
 
 def test_normalize_category_label_handles_none():
     assert normalize_category_label(None) is None
+
+
+def test_normalize_category_label_maps_drift_aliases():
+    assert normalize_category_label("AD Account Support") == "ad_account_creation"
+    assert normalize_category_label("VIT Email") == "vit_email"
+
+
+def test_key_to_display_returns_canonical_label_not_alias():
+    assert category_key_to_display("ad_account_creation") == "AD Account Creation"
+    assert category_key_to_display("vit_email") == "VIT Email Support"
+    assert category_key_to_display("general") is None
+    assert category_key_to_display(None) is None
+
+
+def test_every_mapped_key_has_a_canonical_label_that_round_trips():
+    for key in set(CATEGORY_DISPLAY_TO_KEY.values()):
+        assert key in VALID_CATEGORIES
+        label = category_key_to_display(key)
+        assert normalize_category_label(label) == key
+
+
+def test_display_labels_for_key_lists_canonical_first_then_aliases():
+    assert display_labels_for_key("vit_email") == ["VIT Email Support", "VIT Email"]
+    assert display_labels_for_key("printer_support") == ["Printer Support"]
+    assert display_labels_for_key("general") == []
+
+
+def _dataset_category_labels() -> set[str]:
+    labels: set[str] = set()
+    for data_dir in _TICKET_DATA_DIRS:
+        for path in sorted(data_dir.glob("*.json")):
+            records = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                continue  # not a ticket list (e.g. agent3_gold_kb.json)
+            for ticket in records:
+                for field in ("true_category", "category_selected"):
+                    if ticket.get(field):
+                        labels.add(ticket[field])
+    return labels
+
+
+def test_every_dataset_category_label_normalizes_to_a_valid_key():
+    labels = _dataset_category_labels()
+    if not labels:
+        pytest.skip("no ticket data files found")
+    unmapped = sorted(label for label in labels if normalize_category_label(label) not in VALID_CATEGORIES)
+    assert unmapped == []
