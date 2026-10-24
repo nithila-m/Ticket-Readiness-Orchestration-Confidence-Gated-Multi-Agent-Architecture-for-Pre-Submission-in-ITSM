@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.clarification_router import router as clarification_router
 from app.config.settings import settings
-from app.dependencies import get_store, get_ticket_analysis_service
+from app.dependencies import get_dispatcher, get_store, get_ticket_analysis_service
 from app.providers.exceptions import LLMProviderError
 from app.schemas.analysis import AnalysisResult
 from app.schemas.conversation import UserMessageRequest
@@ -21,6 +21,12 @@ async def lifespan(app: FastAPI):
     store_factory = app.dependency_overrides.get(get_store, get_store)
     store_factory().init_db()
     yield
+    # Close the Jira HTTP client, but only if a dispatcher was ever built -
+    # never construct one (or touch Jira settings) just to shut it down.
+    if get_dispatcher.cache_info().currsize:
+        aclose = getattr(get_dispatcher().adapter, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 app = FastAPI(

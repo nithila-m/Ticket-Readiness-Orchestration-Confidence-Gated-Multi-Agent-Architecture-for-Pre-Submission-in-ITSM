@@ -8,6 +8,7 @@ from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
 from app.integrations.base import NullAdapter
+from app.integrations.jira_adapter import JiraAdapter
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_classification_provider import GroqClassificationProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
@@ -32,11 +33,13 @@ def get_store() -> SqliteStore:
 @lru_cache
 def get_dispatcher() -> Dispatcher:
     """
-    Agent 6 Dispatcher: SQLite first, then the external adapter. Local-only
-    (NullAdapter) until the Jira adapter lands in Phase 4. Not wired into
+    Agent 6 Dispatcher: SQLite first, then the external adapter - Jira when
+    settings.jira_enabled, otherwise local-only (NullAdapter). The Jira
+    HTTP client is closed in app.main's lifespan shutdown. Not wired into
     ClarificationService or the API yet (Phase 5).
     """
-    return Dispatcher(get_store(), NullAdapter())
+    adapter = JiraAdapter.from_settings(settings) if settings.jira_enabled else NullAdapter()
+    return Dispatcher(get_store(), adapter)
 
 
 @lru_cache
