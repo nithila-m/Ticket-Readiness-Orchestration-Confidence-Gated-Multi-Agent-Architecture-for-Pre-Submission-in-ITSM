@@ -3,7 +3,7 @@ from functools import lru_cache
 from app.agents.adaptive_clarifier import AdaptiveClarifier
 from app.agents.classification_agent import ClassificationAgent
 from app.agents.correlation_engine import CorrelationEngine
-
+from app.agents.dispatcher import Dispatcher
 from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
