@@ -3,15 +3,40 @@ from functools import lru_cache
 from app.agents.adaptive_clarifier import AdaptiveClarifier
 from app.agents.classification_agent import ClassificationAgent
 from app.agents.correlation_engine import CorrelationEngine
+
 from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
+from app.integrations.base import NullAdapter
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_classification_provider import GroqClassificationProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.services.clarification_service import ClarificationService
 from app.services.ticket_analysis_service import TicketAnalysisService
+from app.storage.sqlite_store import SqliteStore
+
+
+@lru_cache
+def get_store() -> SqliteStore:
+    """
+    Singleton SQLite store for tickets (Agent 6) and the audit trail.
+    The path comes from settings.sqlite_path (repo-root tro.db by default).
+    Tables are created in app.main's lifespan handler via init_db(), not
+    here, so importing this module never touches the disk.
+    Tests override this with app.dependency_overrides[get_store].
+    """
+    return SqliteStore(settings.sqlite_path)
+
+
+@lru_cache
+def get_dispatcher() -> Dispatcher:
+    """
+    Agent 6 Dispatcher: SQLite first, then the external adapter. Local-only
+    (NullAdapter) until the Jira adapter lands in Phase 4. Not wired into
+    ClarificationService or the API yet (Phase 5).
+    """
+    return Dispatcher(get_store(), NullAdapter())
 
 
 @lru_cache

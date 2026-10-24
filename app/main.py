@@ -1,16 +1,33 @@
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.clarification_router import router as clarification_router
 from app.config.settings import settings
-from app.dependencies import get_ticket_analysis_service
+from app.dependencies import get_store, get_ticket_analysis_service
 from app.providers.exceptions import LLMProviderError
 from app.schemas.analysis import AnalysisResult
 from app.schemas.conversation import UserMessageRequest
 from app.services.ticket_analysis_service import TicketAnalysisService
 
-app = FastAPI(title="TRO - Ticket Readiness Orchestration", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create the SQLite tables (tickets, audit_events) once at startup.
+    # Idempotent - safe on every restart. Goes through app.dependency_overrides
+    # if a test has swapped the store, so tests never touch the real tro.db.
+    store_factory = app.dependency_overrides.get(get_store, get_store)
+    store_factory().init_db()
+    yield
+
+
+app = FastAPI(
+    title="TRO - Ticket Readiness Orchestration",
+    version="0.2.0",
+    lifespan=lifespan,
+)
 
 # Demo-only CORS: allows the frontend to be opened from a different origin
 # (e.g. a separate dev server) if you choose not to use the static mount
