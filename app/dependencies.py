@@ -9,6 +9,7 @@ from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
 from app.integrations.base import NullAdapter
 from app.integrations.jira_adapter import JiraAdapter
+from app.orchestration import GraphConversationService
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_classification_provider import GroqClassificationProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
@@ -105,7 +106,7 @@ def get_correlation_agent() -> CorrelationEngine:
 
 
 @lru_cache
-def get_clarification_service() -> ClarificationService:
+def get_clarification_service() -> ClarificationService | GraphConversationService:
     """
     Builds the real, Groq-backed ClarificationService for Agent 2, plus
     Agent 3's KBDeflectionAgent.
@@ -128,7 +129,12 @@ def get_clarification_service() -> ClarificationService:
     repository = get_conversation_repository()
     kb_agent = get_kb_deflection_agent()
 
-    return ClarificationService(
+    # settings.orchestrator picks the LangGraph orchestrator (default) or the
+    # hand-written service; same constructor, same methods, same behaviour.
+    service_cls = (
+        GraphConversationService if settings.orchestrator == "langgraph" else ClarificationService
+    )
+    return service_cls(
         extraction_service, clarifier, repository, kb_agent,
         ticket_pipeline=get_ticket_pipeline(), store=get_store(),
     )

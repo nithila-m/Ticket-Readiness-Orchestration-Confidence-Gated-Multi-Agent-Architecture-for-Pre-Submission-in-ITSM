@@ -12,6 +12,7 @@ import pytest
 
 from app.agents.kb_deflection_agent import KBDeflectionAgent, KBRetrievalResult
 from app.config.settings import settings
+from app.orchestration import GraphConversationService
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.schemas.analysis import AnalysisResult
 from app.schemas.clarification import ClarificationDecision
@@ -80,6 +81,19 @@ def _make_ready_decision() -> ClarificationDecision:
         priority="low",
         confidence=0.9,
     )
+
+
+@pytest.fixture(autouse=True, params=["service", "langgraph"])
+def implementation(request, monkeypatch):
+    """
+    Runs every test in this module twice: against the hand-written
+    ClarificationService and against the LangGraph-backed
+    GraphConversationService (same constructor, same methods), by swapping
+    the module-level name the tests construct.
+    """
+    if request.param == "langgraph":
+        monkeypatch.setitem(globals(), "ClarificationService", GraphConversationService)
+    return request.param
 
 
 @pytest.fixture
@@ -327,6 +341,26 @@ class FakePipeline:
         self.escalate_calls.append(reason)
         state.terminal_outcome = "ESCALATED"
         return state
+
+    # Step methods - what the LangGraph nodes call instead of run()/escalate().
+    # They record into the same lists so each test asserts the same thing
+    # against both orchestrators.
+    async def correlate(self, state):
+        self.run_calls.append(state.conversation_id)
+
+    async def classify(self, state):
+        pass
+
+    async def gate(self, state):
+        return "DISPATCH"
+
+    async def dispatch(self, state):
+        state.terminal_outcome = "DISPATCHED"
+        return state
+
+    async def enqueue_review(self, state, reason, outcome):
+        self.escalate_calls.append(reason)
+        state.terminal_outcome = outcome
 
 
 def _make_escalate_decision() -> ClarificationDecision:

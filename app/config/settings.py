@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
@@ -71,8 +73,12 @@ class Settings(BaseSettings):
     jira_priority_map: dict[str, str] = {"P1": "Highest", "P2": "High", "P3": "Medium", "P4": "Low"}
     jira_timeout_seconds: float = 10.0
 
-    # Interim wiring until the LangGraph orchestrator replaces ClarificationService
+    # READY runs Agents 4-6 (correlate -> classify -> gate -> dispatch/review)
     auto_dispatch_on_ready: bool = False
+    # Conversation orchestrator behind the API: "langgraph" (app/orchestration)
+    # or "service" (hand-written ClarificationService). Both run the same step
+    # methods and pass the same tests; "service" is the rollback switch.
+    orchestrator: Literal["langgraph", "service"] = "langgraph"
 
     @model_validator(mode="after")
     def _default_classification_model(self):

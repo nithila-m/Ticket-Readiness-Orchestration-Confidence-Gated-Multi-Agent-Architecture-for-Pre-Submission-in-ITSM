@@ -25,6 +25,7 @@ from app.repositories.in_memory_conversation_repository import InMemoryConversat
 from app.schemas.analysis import AnalysisResult
 from app.schemas.clarification import ClarificationDecision
 from app.schemas.extraction import CategoryPrediction, ExtractedField
+from app.orchestration import GraphConversationService
 from app.services.clarification_service import ClarificationService
 
 client = TestClient(app)
@@ -131,6 +132,19 @@ def _build_service(extraction_results, decisions, kb_result):
     repository = InMemoryConversationRepository()
     service = ClarificationService(extraction, clarifier, repository, kb_agent)
     return service, clarifier, kb_agent
+
+
+@pytest.fixture(autouse=True, params=["service", "langgraph"])
+def implementation(request, monkeypatch):
+    """
+    Runs every test in this module twice: against the hand-written
+    ClarificationService and against the LangGraph-backed
+    GraphConversationService (same constructor, same methods), by swapping
+    the module-level name _build_service() uses.
+    """
+    if request.param == "langgraph":
+        monkeypatch.setitem(globals(), "ClarificationService", GraphConversationService)
+    return request.param
 
 
 @pytest.fixture(autouse=True)

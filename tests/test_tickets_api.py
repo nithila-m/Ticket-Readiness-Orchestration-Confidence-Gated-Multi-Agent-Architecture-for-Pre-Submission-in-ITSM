@@ -26,6 +26,7 @@ from app.dependencies import (
 )
 from app.integrations.base import NullAdapter
 from app.main import app
+from app.orchestration import GraphConversationService
 from app.providers.exceptions import LLMProviderError
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.schemas.analysis import AnalysisResult
@@ -85,8 +86,10 @@ class FakeClassifier:
         return _classification(self.confidence)
 
 
-@pytest.fixture
-def env(tmp_path, monkeypatch):
+@pytest.fixture(params=["service", "langgraph"])
+def env(request, tmp_path, monkeypatch):
+    # Every API test runs against both orchestrators (same constructor/methods).
+    service_cls = GraphConversationService if request.param == "langgraph" else ClarificationService
     monkeypatch.setattr(settings, "auto_dispatch_on_ready", True)
     store = SqliteStore(tmp_path / "api.db")
     repo = InMemoryConversationRepository()
@@ -99,7 +102,7 @@ def env(tmp_path, monkeypatch):
     classifier = FakeClassifier()
     dispatcher = Dispatcher(store, NullAdapter())
     pipeline = TicketPipeline(FakeCorrelation(), store, classifier, dispatcher, store, 0.6)
-    service = ClarificationService(extraction, clarifier, repo, kb, ticket_pipeline=pipeline, store=store)
+    service = service_cls(extraction, clarifier, repo, kb, ticket_pipeline=pipeline, store=store)
 
     overrides = {
         get_store: lambda: store,

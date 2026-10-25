@@ -72,6 +72,23 @@ class TicketPipeline:
         self._threshold = confidence_threshold
 
     async def run(self, state: ConversationState) -> ConversationState:
+        await self.correlate(state)
+        await self.classify(state)
+        if await self.gate(state) == "REVIEW":
+            await self.enqueue_review(state, LOW_CONFIDENCE_REASON, "PENDING_REVIEW")
+        else:
+            await self.dispatch(state)
+        return state
+
+    async def escalate(self, state: ConversationState, reason: str) -> ConversationState:
+        """Agent 2 gave up (or hit the turn budget): straight to human review."""
+        await self.enqueue_review(state, reason, "ESCALATED")
+        return state
+
+    # --- individual steps (run() above, and the LangGraph nodes in
+    #     app/orchestration/nodes.py, are both built from these) ----------
+
+    async def correlate(self, state: ConversationState) -> CorrelationResult:
         start = time.perf_counter()
         correlation = await self._correlation_agent.check(state, self._pool)
         state.correlation = correlation
@@ -80,7 +97,9 @@ class TicketPipeline:
             "cluster_id": correlation.cluster_id,
             "similar_tickets": len(correlation.similar_tickets),
         }, start)
+        return correlation
 
+    async def classify(self, state: ConversationState) -> ClassificationResult:
         start = time.perf_counter()
         classification = await self._classifier.classify(state)
         state.classification = classification
@@ -89,28 +108,25 @@ class TicketPipeline:
             "assignee_group": classification.assignee_group,
             "source": classification.source,
         }, start)
+        return classification
 
+    async def gate(self, state: ConversationState) -> GateDecision:
+        """Apply (and audit) the confidence gate. Needs classify() first."""
         start = time.perf_counter()
-        gate = confidence_gate(correlation, classification, self._threshold)
-        await self._audit(state, "confidence_gate", gate, classification.confidence, {
+        decision = confidence_gate(state.correlation, state.classification, self._threshold)
+        await self._audit(state, "confidence_gate", decision, state.classification.confidence, {
             "threshold": self._threshold,
         }, start)
+        return decision
 
-        if gate == "REVIEW":
-            await self._enqueue_review(state, LOW_CONFIDENCE_REASON, "PENDING_REVIEW")
-        else:
-            result = await self._dispatcher.dispatch(state)
-            state.ticket = result.ticket
-            state.terminal_outcome = result.outcome
-            await self._audit_terminal(state)
+    async def dispatch(self, state: ConversationState) -> ConversationState:
+        result = await self._dispatcher.dispatch(state)
+        state.ticket = result.ticket
+        state.terminal_outcome = result.outcome
+        await self._audit_terminal(state)
         return state
 
-    async def escalate(self, state: ConversationState, reason: str) -> ConversationState:
-        """Agent 2 gave up (or hit the turn budget): straight to human review."""
-        await self._enqueue_review(state, reason, "ESCALATED")
-        return state
-
-    async def _enqueue_review(
+    async def enqueue_review(
         self, state: ConversationState, reason: str, outcome: TerminalOutcome
     ) -> None:
         start = time.perf_counter()
