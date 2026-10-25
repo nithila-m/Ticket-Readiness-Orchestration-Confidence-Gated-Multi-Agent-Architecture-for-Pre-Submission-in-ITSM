@@ -13,6 +13,7 @@ builder never re-derives it.
 
 import re
 
+from app.agents.request_text import build_kb_query
 from app.config.category_profiles import CATEGORY_DISPLAY_TO_KEY, get_profile
 from app.schemas.conversation import ConversationState
 from app.schemas.pipeline import TicketRecord
@@ -82,6 +83,21 @@ def build_description(state: ConversationState) -> str:
     return "\n\n".join(sections)
 
 
+def build_correlation_text(state: ConversationState) -> str | None:
+    """
+    The text Agent 4 compares later requests against: the same
+    build_kb_query() format, from the same source (Agent 1's category and
+    fields), as the correlation engine's incoming query. None when no
+    field was extracted - a bare "Category: ..." line would make every
+    field-less request in that category an exact match - so the engine
+    falls back to title + description.
+    """
+    if not any(f.value is not None for f in state.extracted_fields.values()):
+        return None
+    category = state.detected_category.value if state.detected_category else None
+    return build_kb_query(category, state.extracted_fields) or None
+
+
 def build_ticket(state: ConversationState) -> TicketRecord:
     """
     Assemble the canonical TicketRecord. ticket_id stays None - only the
@@ -112,4 +128,5 @@ def build_ticket(state: ConversationState) -> TicketRecord:
         building=(
             str(building.value) if building is not None and building.value is not None else None
         ),
+        correlation_text=build_correlation_text(state),
     )

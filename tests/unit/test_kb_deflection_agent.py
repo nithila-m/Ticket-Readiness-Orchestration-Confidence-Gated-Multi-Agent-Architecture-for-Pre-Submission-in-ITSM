@@ -197,3 +197,9 @@ def test_deflect_custom_thresholds(fake_collection):
     result = kb_retrieval_agent.deflect("q", strong_threshold=0.6, weak_threshold=0.3)
     assert result["outcome"] == "STRONG_MATCH"
     assert result["deflect"] is True
+
+
+def test_build_kb_query_still_importable_from_kb_deflection_agent():
+    from app.agents import request_text
+
+    assert build_kb_query is request_text.build_kb_query

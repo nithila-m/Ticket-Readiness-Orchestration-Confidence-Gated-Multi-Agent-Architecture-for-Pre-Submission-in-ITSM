@@ -12,7 +12,9 @@ from datetime import datetime, timedelta, timezone
 
 
 from app.agents.classification_agent import apply_cluster_override
-from app.agents.correlation_engine import CorrelationEngine
+from app.agents.correlation_engine import CorrelationEngine, candidate_text
+from app.agents.ticket_builder import build_correlation_text, build_description
+from app.config.settings import settings
 from app.agents.interfaces import CorrelationAgent, OpenTicketPool
 from app.agents.seed_ticket_pool import JsonOpenTicketPool
 from app.config.routing import team_for_category
@@ -269,3 +271,40 @@ async def test_incident_cluster_feeds_agent5_p1_override():
     assert priority == "P1"
     assert correlation.cluster_id in rationale
     assert "2 similar open ticket(s)" in rationale
+
+
+# --- correlation_text -----------------------------------------------------------
+
+def test_candidate_text_uses_correlation_text_when_set():
+    t = ticket("T1", 0.5).model_copy(update={"correlation_text": "symptom_type: drops"})
+    assert candidate_text(t) == "symptom_type: drops"
+
+
+def test_candidate_text_falls_back_to_title_and_description():
+    for value in (None, ""):
+        t = ticket("T1", 0.5).model_copy(update={"correlation_text": value})
+        assert candidate_text(t) == f"{t.title}\ndetails"
+
+
+def exact_match_embed(texts: list[str]) -> list[list[float]]:
+    """Identical strings -> identical vectors; any two different strings -> orthogonal."""
+    index = {t: i for i, t in enumerate(dict.fromkeys(texts))}
+    return [[1.0 if i == index[t] else 0.0 for i in range(len(index))] for t in texts]
+
+
+async def test_repeat_request_is_duplicate_of_ticket_with_boilerplate_body():
+    s = state(symptom="drops every few minutes")
+    stored = ticket("T1", 0.0).model_copy(update={
+        "description": build_description(s),  # full ticket body: "Reported by user:", ...
+        "correlation_text": build_correlation_text(s),
+    })
+    eng = engine(embed_fn=exact_match_embed, dup_threshold=settings.corr_dup_threshold)
+
+    result = await eng.check(s, FakePool([stored]))
+
+    assert "Completeness:" in stored.description
+    assert result.outcome == "DUPLICATE"
+    assert result.duplicate_of == "T1"
+    # Without correlation_text the same ticket is compared by its body instead.
+    legacy = stored.model_copy(update={"correlation_text": None})
+    assert (await eng.check(s, FakePool([legacy]))).outcome == "NO_MATCH"
