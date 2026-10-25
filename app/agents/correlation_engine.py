@@ -6,8 +6,8 @@ them by cosine similarity and applies fixed threshold rules. There is no
 LLM call and no learned model beyond the sentence embedder.
 
 Decision order:
-  1. DUPLICATE        best eligible open ticket scores >= dup_threshold
-                      (see the category rule below) -> duplicate_of it.
+  1. DUPLICATE        the best-ranked eligible open ticket whose RAW cosine
+                      similarity is >= dup_threshold -> duplicate_of it.
   2. INCIDENT_CLUSTER at least cluster_min_count tickets, counting the
                       incoming one, that score >= cluster_threshold, are in
                       the same building and were created within
@@ -25,6 +25,15 @@ below the duplicate threshold. Tickets without correlation_text (seed
 tickets, tickets created before it existed, or no extracted fields) fall
 back to "title\ndescription".
 
+Minimum-field gate (DUPLICATE only): a query with fewer than
+dup_min_fields non-null extracted fields skips the DUPLICATE step, and a
+candidate whose correlation_text has fewer than dup_min_fields
+"field: value" lines (the "Category:" line does not count) cannot be the
+duplicate. One-field texts are mostly the category line, so unrelated
+thin requests collapse onto each other. Candidates without
+correlation_text (title + description fallback) stay eligible. The
+cluster step ignores this gate.
+
 Building rule: if the incoming building and a candidate's building are
 both known and differ, the candidate can be neither a duplicate nor a
 cluster member. Agent 1 does not currently extract a building, so when the
@@ -36,7 +45,10 @@ Category rule: Agent 4 runs before Agent 5, so Agent 1's category may
 differ from the category stored on open tickets. Category is therefore a
 scoring signal, not a filter: when both are known and agree, the score is
 the cosine similarity + category_agreement_bonus (capped at 1.0);
-otherwise the score is the plain similarity. A duplicate across different
+otherwise the score is the plain similarity. The score only RANKS
+candidates and decides cluster membership: the DUPLICATE threshold is
+compared with the raw similarity, because the bonus pushed every
+same-category look-alike to 1.0 on live text. A duplicate across different
 categories additionally needs raw similarity >= cross_category_dup_threshold.
 
 Evidence: similar_tickets carries up to 5 tickets with their RAW cosine
@@ -96,6 +108,24 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / norm if norm else 0.0
 
 
+def query_field_count(state: ConversationState) -> int:
+    """Non-null extracted fields - the "field: value" lines of the query."""
+    return sum(1 for f in state.extracted_fields.values() if f.value is not None)
+
+
+def correlation_field_lines(text: str | None) -> int | None:
+    """
+    "field: value" lines in a stored correlation_text, not counting the
+    "Category:" line; None when the ticket has no correlation_text.
+    """
+    if not text:
+        return None
+    return sum(
+        1 for line in text.splitlines()
+        if line.strip() and not line.startswith("Category:")
+    )
+
+
 def candidate_text(ticket: TicketRecord) -> str:
     """Stored correlation_text when set; else title + description (see module docstring)."""
     if ticket.correlation_text:
@@ -150,6 +180,7 @@ class CorrelationEngine:
         lookback_hours: float | None = None,
         category_agreement_bonus: float | None = None,
         cross_category_dup_threshold: float | None = None,
+        dup_min_fields: int | None = None,
     ):
         """Thresholds left as None come from app.config.settings (corr_*)."""
 
@@ -171,6 +202,7 @@ class CorrelationEngine:
         self.cross_category_dup_threshold = pick(
             cross_category_dup_threshold, settings.corr_cross_category_dup_threshold
         )
+        self.dup_min_fields = pick(dup_min_fields, settings.corr_dup_min_fields)
 
     async def check(self, state: ConversationState, pool: OpenTicketPool) -> CorrelationResult:
         try:
@@ -216,10 +248,16 @@ class CorrelationEngine:
                 for _, raw, _, t in rows[:MAX_EVIDENCE]
             ]
 
-        # 1. DUPLICATE
-        for score, raw, agrees, ticket in scored:
+        # 1. DUPLICATE (skipped for a thin query - see the minimum-field gate)
+        dup_candidates = scored if query_field_count(state) >= self.dup_min_fields else []
+        for score, raw, agrees, ticket in dup_candidates:
             if score < self.dup_threshold:
-                break
+                break  # ranked by score >= raw: nothing further down can pass
+            if raw < self.dup_threshold:
+                continue  # the threshold applies to raw cosine; the bonus only ranks
+            field_lines = correlation_field_lines(ticket.correlation_text)
+            if field_lines is not None and field_lines < self.dup_min_fields:
+                continue
             categories_differ = category is not None and not agrees
             if categories_differ and raw < self.cross_category_dup_threshold:
                 continue

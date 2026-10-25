@@ -1,5 +1,5 @@
 // TRO Chatbot frontend — talks ONLY to the backend API (conversation,
-// deflection-feedback and audit endpoints). No extraction, scoring,
+// deflection-feedback, duplicate-feedback and audit endpoints). No extraction, scoring,
 // clarification or routing logic lives here; it only renders what the
 // server decided. Every server value goes through escapeHtml().
 
@@ -193,6 +193,12 @@ async function sendTurn(text) {
 function handleResponse(data) {
   updateTurnBadge(data.turn);
 
+  // Agent 4 suspects a duplicate: nothing is merged until the user answers.
+  if (data.awaiting_duplicate_confirmation) {
+    showDuplicateQuestion(data);
+    return;
+  }
+
   // Agents 4-6 already reached a final outcome this turn (ticket created,
   // merged, sent to review, ...): show it and close the conversation.
   if (data.terminal_outcome) {
@@ -298,6 +304,8 @@ async function sendDeflectionFeedback(resolved, label) {
       addErrorMessage(`Request failed (${res.status}): ${body?.detail || res.statusText}`);
       buttons.forEach((b) => (b.disabled = false));
       setComposerEnabled(true);
+    } else if (body.awaiting_duplicate_confirmation) {
+      showDuplicateQuestion(body);
     } else if (body.terminal_outcome) {
       addAssistantMessage(outcomeIntro(body), null);
       showOutcomeCard(body);
@@ -316,13 +324,98 @@ async function sendDeflectionFeedback(resolved, label) {
   isBusy = false;
 }
 
+// ---- Suspected duplicate (Agent 4) ----
+// The server only sends the candidate's id, title and created time. The
+// question is rebuilt here so the time shows in the browser's local time
+// (the server's duplicate_question uses UTC and is only a fallback).
+function formatLocalTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+  });
+}
+
+function duplicateQuestionText(data) {
+  const c = data.duplicate_candidate;
+  if (!c) return data.duplicate_question || "This looks like an existing ticket. Is this the same issue?";
+  const label = c.title ? `${c.ticket_id} - ${c.title}` : c.ticket_id;
+  const opened = formatLocalTime(c.created_at);
+  return `This looks like an existing ticket: ${label}${opened ? ` (opened ${opened})` : ""}. Is this the same issue?`;
+}
+
+function showDuplicateQuestion(data) {
+  addAssistantMessage(duplicateQuestionText(data), null);
+  el.quickReplies.classList.add("hidden");
+  el.completionCard.className = "completion-card duplicate";
+  el.completionCard.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "feedback-row";
+  row.innerHTML = `
+    <span>Is this the same issue?</span>
+    <button type="button" class="btn-primary" data-duplicate="true">Yes, same issue</button>
+    <button type="button" class="btn-secondary" data-duplicate="false">No, it's different</button>
+  `;
+  row.querySelectorAll("button").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      sendDuplicateFeedback(btn.dataset.duplicate === "true", btn.textContent)
+    )
+  );
+  el.completionCard.appendChild(row);
+  el.completionCard.classList.remove("hidden");
+  // The server refuses messages until this is answered.
+  setComposerEnabled(false);
+  scrollToBottom();
+}
+
+async function sendDuplicateFeedback(isDuplicate, label) {
+  if (isBusy || isConversationOver) return;
+  isBusy = true;
+  const buttons = el.completionCard.querySelectorAll(".feedback-row button");
+  buttons.forEach((b) => (b.disabled = true));
+  addUserMessage(label);
+  const typingEl = addTypingIndicator();
+
+  try {
+    const res = await fetch(
+      `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/duplicate-feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_duplicate: isDuplicate }),
+      }
+    );
+    removeTypingIndicator(typingEl);
+    const body = await safeJson(res);
+
+    if (!res.ok) {
+      addErrorMessage(`Request failed (${res.status}): ${body?.detail || res.statusText}`);
+      buttons.forEach((b) => (b.disabled = false));
+    } else if (body.terminal_outcome) {
+      addAssistantMessage(outcomeIntro(body), null);
+      showOutcomeCard(body);
+      endConversationInput();
+    } else {
+      addAssistantMessage("Thanks for letting us know.", null);
+      el.completionCard.classList.add("hidden");
+      setComposerEnabled(true);
+    }
+  } catch (err) {
+    removeTypingIndicator(typingEl);
+    addErrorMessage(`Couldn't reach the server: ${err.message}`);
+    buttons.forEach((b) => (b.disabled = false));
+  }
+  isBusy = false;
+}
+
 // ---- Final outcomes (Agents 4-6) ----
 function outcomeIntro(data) {
   switch (data.terminal_outcome) {
     case "DISPATCHED":
       return "Your ticket has been created and routed to the right team.";
     case "MERGED":
-      return "This looks like an issue that's already been reported, so I've linked your report to the existing ticket.";
+      return "Thanks for confirming — I've linked your report to the existing ticket.";
     case "PENDING_REVIEW":
     case "ESCALATED":
       return "I've passed this to a specialist for review.";

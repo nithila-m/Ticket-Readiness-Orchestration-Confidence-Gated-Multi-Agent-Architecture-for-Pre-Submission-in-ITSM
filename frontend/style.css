@@ -277,6 +277,11 @@ body {
   border: 1px solid #fed7aa;
 }
 .completion-card h3 { margin: 0 0 6px 0; font-size: 16px; }
+.completion-card.duplicate {
+  background: #eef1fb;
+  border: 1px solid #c7d0f0;
+}
+.completion-card.duplicate .feedback-row { margin-top: 0; }
 .completion-card.resolved {
   background: #eff6ff;
   border: 1px solid #bfdbfe;

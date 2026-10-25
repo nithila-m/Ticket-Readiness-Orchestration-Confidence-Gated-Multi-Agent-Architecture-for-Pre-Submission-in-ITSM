@@ -33,10 +33,13 @@ class Settings(BaseSettings):
     kb_weak_threshold: float = 0.45
 
     # --- Agent 4 (Correlation Engine: duplicates + incident clusters) ---
-    # Cosine similarity at/above which the best open ticket is a duplicate.
-    # 0.95 and the 0.70 cluster threshold were chosen from results/agent4_eval.md
-    # (synthetic labels; free-text proxy query, see that report).
-    corr_dup_threshold: float = 0.95
+    # RAW cosine similarity at/above which the best-ranked eligible open
+    # ticket is suggested as a duplicate (the user confirms before a merge).
+    # 0.87 from results/agent4_live_calibration.md ("Adopted threshold"):
+    # the last value before duplicate recall drops sharply on live-format
+    # text. The 0.70 cluster threshold is still from results/agent4_eval.md
+    # (free-text proxy query) and has not been re-calibrated.
+    corr_dup_threshold: float = 0.87
     # Similarity at/above which an open ticket counts towards a cluster.
     corr_cluster_threshold: float = 0.70
     # Tickets needed for an incident cluster, INCLUDING the incoming one
@@ -49,6 +52,11 @@ class Settings(BaseSettings):
     # raw similarity >= corr_cross_category_dup_threshold.
     corr_category_agreement_bonus: float = 0.05
     corr_cross_category_dup_threshold: float = 0.95
+    # DUPLICATE needs at least this many non-null Agent 1 fields in the query
+    # and "field: value" lines in a candidate's correlation_text (tickets
+    # without one stay eligible). Thin one-field texts collapse onto each
+    # other (results/agent4_live_calibration.md). Clusters ignore it.
+    corr_dup_min_fields: int = 2
 
     # --- Agent 5 (Classify, Prioritise, Explain) ---
     # Empty = use groq_model (resolved in _default_classification_model), so

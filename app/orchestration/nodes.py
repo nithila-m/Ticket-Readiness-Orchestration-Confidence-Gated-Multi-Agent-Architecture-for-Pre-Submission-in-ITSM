@@ -54,6 +54,14 @@ class PipelineNodes:
         await self._pipeline.correlate(state["conversation"])
         return {"conversation": state["conversation"]}
 
+    async def confirm_duplicate(self, state: GraphState) -> dict:
+        await self._pipeline.ask_duplicate_confirmation(state["conversation"])
+        return {"conversation": state["conversation"]}
+
+    async def apply_duplicate_feedback(self, state: GraphState) -> dict:
+        await self._pipeline.apply_duplicate_answer(state["conversation"], state["is_duplicate"])
+        return {"conversation": state["conversation"]}
+
     async def classify(self, state: GraphState) -> dict:
         await self._pipeline.classify(state["conversation"])
         gate = await self._pipeline.gate(state["conversation"])

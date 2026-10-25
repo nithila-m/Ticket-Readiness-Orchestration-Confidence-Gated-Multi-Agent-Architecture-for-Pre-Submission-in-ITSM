@@ -219,7 +219,8 @@ def test_graph_has_the_documented_nodes(store):
     nodes = set(service.graph.get_graph().nodes)
     assert {
         "extract", "kb", "deflect", "clarify", "apply_feedback", "close_resolved",
-        "correlate", "classify", "enqueue_review", "dispatch",
+        "correlate", "confirm_duplicate", "apply_duplicate_feedback",
+        "classify", "enqueue_review", "dispatch",
     } <= nodes
 
 
@@ -231,7 +232,7 @@ def _gs(**kw):
     return base
 
 
-@pytest.mark.parametrize("entry", ["message", "feedback", "review_approved"])
+@pytest.mark.parametrize("entry", ["message", "feedback", "duplicate_feedback", "review_approved"])
 def test_entry_router(entry):
     assert routing.entry_router({"entry": entry}) == entry
 
@@ -275,3 +276,13 @@ def test_feedback_router(resolved, enabled, expected):
 ])
 def test_confidence_gate_router(gate, expected):
     assert routing.confidence_gate({"gate": gate}) == expected
+
+
+@pytest.mark.parametrize("outcome, expected", [
+    ("DUPLICATE", "confirm_duplicate"),
+    ("INCIDENT_CLUSTER", "classify"),
+    ("NO_MATCH", "classify"),
+])
+def test_correlation_router(outcome, expected):
+    conv = ConversationState(conversation_id="c", correlation=CorrelationResult(outcome=outcome))
+    assert routing.correlation_router({"conversation": conv}) == expected
