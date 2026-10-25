@@ -33,6 +33,10 @@ class Dispatcher:
         self._store = store
         self._adapter = adapter
 
+    @property
+    def adapter(self) -> ExternalTicketAdapter:
+        return self._adapter
+
     async def dispatch(self, state: ConversationState) -> DispatchResult:
         start = time.perf_counter()
 

@@ -12,11 +12,18 @@ import pytest
 
 from app.agents.kb_deflection_agent import KBDeflectionAgent, KBRetrievalResult
 from app.config.settings import settings
+from app.orchestration import GraphConversationService
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.schemas.analysis import AnalysisResult
 from app.schemas.clarification import ClarificationDecision
 from app.schemas.extraction import CategoryPrediction, ExtractedField
-from app.services.clarification_service import ClarificationService
+from app.services.clarification_service import (
+    ClarificationService,
+    ConversationClosedError,
+    ConversationNotFoundError,
+    ConversationStateError,
+)
+from app.storage.sqlite_store import SqliteStore
 
 
 def _make_no_match_kb_result() -> KBRetrievalResult:
@@ -74,6 +81,19 @@ def _make_ready_decision() -> ClarificationDecision:
         priority="low",
         confidence=0.9,
     )
+
+
+@pytest.fixture(autouse=True, params=["service", "langgraph"])
+def implementation(request, monkeypatch):
+    """
+    Runs every test in this module twice: against the hand-written
+    ClarificationService and against the LangGraph-backed
+    GraphConversationService (same constructor, same methods), by swapping
+    the module-level name the tests construct.
+    """
+    if request.param == "langgraph":
+        monkeypatch.setitem(globals(), "ClarificationService", GraphConversationService)
+    return request.param
 
 
 @pytest.fixture
@@ -301,3 +321,239 @@ async def test_kb_retrieval_failure_falls_through_to_agent2(
     assert state.kb_similarity_score == 0.0
     assert decision.action == "ASK_CLARIFICATION"
     fake_clarifier.decide.assert_called_once()
+
+
+# --- Agents 4-6 wiring (TicketPipeline + audit) -------------------------------
+
+class FakePipeline:
+    """Records calls; sets the terminal outcome the real pipeline would."""
+
+    def __init__(self):
+        self.run_calls = []
+        self.escalate_calls = []
+
+    async def run(self, state):
+        self.run_calls.append(state.conversation_id)
+        state.terminal_outcome = "DISPATCHED"
+        return state
+
+    async def escalate(self, state, reason):
+        self.escalate_calls.append(reason)
+        state.terminal_outcome = "ESCALATED"
+        return state
+
+    # Step methods - what the LangGraph nodes call instead of run()/escalate().
+    # They record into the same lists so each test asserts the same thing
+    # against both orchestrators.
+    async def correlate(self, state):
+        self.run_calls.append(state.conversation_id)
+
+    async def classify(self, state):
+        pass
+
+    async def gate(self, state):
+        return "DISPATCH"
+
+    async def dispatch(self, state):
+        state.terminal_outcome = "DISPATCHED"
+        return state
+
+    async def enqueue_review(self, state, reason, outcome):
+        self.escalate_calls.append(reason)
+        state.terminal_outcome = outcome
+
+
+def _make_escalate_decision() -> ClarificationDecision:
+    return ClarificationDecision(
+        action="ESCALATE",
+        reasoning="User cannot provide the needed details.",
+        expected_information_gain=0.0,
+        priority="high",
+        confidence=0.6,
+    )
+
+
+@pytest.fixture
+def pipeline():
+    return FakePipeline()
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = SqliteStore(tmp_path / "svc.db")
+    s.init_db()
+    return s
+
+
+@pytest.fixture
+def auto_dispatch(monkeypatch):
+    monkeypatch.setattr(settings, "auto_dispatch_on_ready", True)
+
+
+async def test_ready_with_flag_on_runs_pipeline_once(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline, auto_dispatch
+):
+    fake_clarifier.decide.return_value = _make_ready_decision()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+
+    state, decision = await service.handle_message("conv-1", "Windows 11, no error.")
+
+    assert decision.action == "READY"
+    assert pipeline.run_calls == ["conv-1"]
+    assert state.terminal_outcome == "DISPATCHED"
+    assert (await repository.get("conv-1")).terminal_outcome == "DISPATCHED"  # persisted
+
+
+async def test_message_after_terminal_outcome_is_rejected_and_not_redispatched(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline, auto_dispatch
+):
+    fake_clarifier.decide.return_value = _make_ready_decision()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+    await service.handle_message("conv-1", "Windows 11, no error.")
+
+    with pytest.raises(ConversationClosedError):
+        await service.handle_message("conv-1", "Any update?")
+
+    assert pipeline.run_calls == ["conv-1"]
+    assert fake_extraction_service.analyze.call_count == 1
+    assert (await repository.get("conv-1")).turn_count == 1
+
+
+async def test_ready_with_flag_off_leaves_behaviour_unchanged(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline, monkeypatch
+):
+    monkeypatch.setattr(settings, "auto_dispatch_on_ready", False)
+    fake_clarifier.decide.return_value = _make_ready_decision()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+
+    state, _ = await service.handle_message("conv-1", "Windows 11, no error.")
+
+    assert pipeline.run_calls == []
+    assert state.terminal_outcome is None
+    await service.handle_message("conv-1", "still broken")  # conversation not closed
+
+
+async def test_escalate_calls_pipeline_escalate(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline
+):
+    fake_clarifier.decide.return_value = _make_escalate_decision()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+
+    state, _ = await service.handle_message("conv-1", "I do not know.")
+
+    assert pipeline.escalate_calls == ["clarification_escalated"]
+    assert pipeline.run_calls == []
+    assert state.terminal_outcome == "ESCALATED"
+
+
+async def test_deflected_turn_waits_for_feedback(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline, auto_dispatch
+):
+    fake_kb_agent.check.return_value = _make_strong_match_kb_result()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+
+    state, decision = await service.handle_message("conv-1", "Wifi drops after sleep.")
+
+    assert decision.action == "DEFLECTED"
+    assert state.terminal_outcome is None
+    assert pipeline.run_calls == [] and pipeline.escalate_calls == []
+
+
+async def test_feedback_resolved_closes_as_self_resolved(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline, store
+):
+    fake_kb_agent.check.return_value = _make_strong_match_kb_result()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent,
+        ticket_pipeline=pipeline, store=store,
+    )
+    await service.handle_message("conv-1", "Wifi drops after sleep.")
+
+    state = await service.handle_deflection_feedback("conv-1", resolved=True)
+
+    assert state.kb_feedback == "RESOLVED"
+    assert state.terminal_outcome == "SELF_RESOLVED"
+    assert pipeline.run_calls == []
+    assert (await repository.get("conv-1")).terminal_outcome == "SELF_RESOLVED"
+    stages = [(e.stage, e.decision) for e in await store.fetch_audit("conv-1")]
+    assert stages[-2:] == [("deflection_feedback", "RESOLVED"), ("terminal", "SELF_RESOLVED")]
+
+
+async def test_feedback_not_resolved_runs_ticket_pipeline(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline
+):
+    fake_kb_agent.check.return_value = _make_strong_match_kb_result()
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+    await service.handle_message("conv-1", "Wifi drops after sleep.")
+
+    state = await service.handle_deflection_feedback("conv-1", resolved=False)
+
+    assert state.kb_feedback == "NOT_RESOLVED"
+    assert pipeline.run_calls == ["conv-1"]
+    assert state.terminal_outcome == "DISPATCHED"
+
+
+async def test_feedback_invalid_states(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, pipeline
+):
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, ticket_pipeline=pipeline
+    )
+
+    with pytest.raises(ConversationNotFoundError):
+        await service.handle_deflection_feedback("nope", resolved=True)
+
+    await service.handle_message("conv-ask", "Teams isn't working.")  # ASK, not DEFLECTED
+    with pytest.raises(ConversationStateError):
+        await service.handle_deflection_feedback("conv-ask", resolved=True)
+
+    fake_kb_agent.check.return_value = _make_strong_match_kb_result()
+    await service.handle_message("conv-kb", "Wifi drops after sleep.")
+    await service.handle_deflection_feedback("conv-kb", resolved=True)
+    with pytest.raises(ConversationClosedError):  # feedback twice
+        await service.handle_deflection_feedback("conv-kb", resolved=False)
+    assert issubclass(ConversationClosedError, ConversationStateError)  # both map to 409
+
+
+async def test_turn_stages_are_audited_when_store_is_set(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, store
+):
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, store=store
+    )
+
+    await service.handle_message("conv-1", "Teams isn't working.")
+
+    events = await store.fetch_audit("conv-1")
+    assert [(e.stage, e.decision) for e in events] == [
+        ("extract", "ms_teams"), ("kb", "NO_MATCH"), ("clarify", "ASK_CLARIFICATION"),
+    ]
+    assert all(e.turn == 0 and e.latency_ms >= 0 for e in events)
+    assert events[2].payload["forced_escalation"] is False
+
+
+async def test_kb_stage_not_audited_below_completeness_gate(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, store
+):
+    fake_extraction_service.analyze.return_value = _make_analysis_result(
+        completeness=settings.kb_gate_completeness_threshold - 0.01
+    )
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, store=store
+    )
+
+    await service.handle_message("conv-1", "Teams isn't working.")
+
+    assert [e.stage for e in await store.fetch_audit("conv-1")] == ["extract", "clarify"]

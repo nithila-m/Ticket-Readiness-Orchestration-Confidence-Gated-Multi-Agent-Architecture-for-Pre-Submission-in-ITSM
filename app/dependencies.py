@@ -8,12 +8,15 @@ from app.agents.information_extractor import InformationExtractor
 from app.agents.kb_deflection_agent import KBDeflectionAgent
 from app.config.settings import settings
 from app.integrations.base import NullAdapter
+from app.integrations.jira_adapter import JiraAdapter
+from app.orchestration import GraphConversationService
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_classification_provider import GroqClassificationProvider
 from app.providers.groq_clarification_provider import GroqClarificationProvider
 from app.repositories.in_memory_conversation_repository import InMemoryConversationRepository
 from app.services.clarification_service import ClarificationService
 from app.services.ticket_analysis_service import TicketAnalysisService
+from app.services.ticket_pipeline import TicketPipeline
 from app.storage.sqlite_store import SqliteStore
 
 
@@ -32,11 +35,13 @@ def get_store() -> SqliteStore:
 @lru_cache
 def get_dispatcher() -> Dispatcher:
     """
-    Agent 6 Dispatcher: SQLite first, then the external adapter. Local-only
-    (NullAdapter) until the Jira adapter lands in Phase 4. Not wired into
+    Agent 6 Dispatcher: SQLite first, then the external adapter - Jira when
+    settings.jira_enabled, otherwise local-only (NullAdapter). The Jira
+    HTTP client is closed in app.main's lifespan shutdown. Not wired into
     ClarificationService or the API yet (Phase 5).
     """
-    return Dispatcher(get_store(), NullAdapter())
+    adapter = JiraAdapter.from_settings(settings) if settings.jira_enabled else NullAdapter()
+    return Dispatcher(get_store(), adapter)
 
 
 @lru_cache
@@ -95,14 +100,13 @@ def get_correlation_agent() -> CorrelationEngine:
     sentence-transformers model loads lazily on the first check() call, not
     here and not at app startup. Not wired into ClarificationService - the
     orchestrator owns that call and supplies the OpenTicketPool
-    (app.agents.seed_ticket_pool.JsonOpenTicketPool until Agent 6's
-    SqliteStore replaces it).
+    (get_ticket_pipeline() passes Agent 6's SqliteStore).
     """
     return CorrelationEngine()
 
 
 @lru_cache
-def get_clarification_service() -> ClarificationService:
+def get_clarification_service() -> ClarificationService | GraphConversationService:
     """
     Builds the real, Groq-backed ClarificationService for Agent 2, plus
     Agent 3's KBDeflectionAgent.
@@ -125,4 +129,31 @@ def get_clarification_service() -> ClarificationService:
     repository = get_conversation_repository()
     kb_agent = get_kb_deflection_agent()
 
-    return ClarificationService(extraction_service, clarifier, repository, kb_agent)
+    # settings.orchestrator picks the LangGraph orchestrator (default) or the
+    # hand-written service; same constructor, same methods, same behaviour.
+    service_cls = (
+        GraphConversationService if settings.orchestrator == "langgraph" else ClarificationService
+    )
+    return service_cls(
+        extraction_service, clarifier, repository, kb_agent,
+        ticket_pipeline=get_ticket_pipeline(), store=get_store(),
+    )
+
+
+@lru_cache
+def get_ticket_pipeline() -> TicketPipeline:
+    """
+    Post-READY pipeline: Agent 4 -> Agent 5 -> confidence gate -> Agent 6.
+    The SqliteStore doubles as Agent 4's OpenTicketPool (seed it with
+    scripts/seed_ticket_store.py). Building this loads no model - Agent 4's
+    sentence-transformers model still loads lazily on its first check().
+    """
+    store = get_store()
+    return TicketPipeline(
+        correlation_agent=get_correlation_agent(),
+        pool=store,
+        classifier=get_classification_agent(),
+        dispatcher=get_dispatcher(),
+        store=store,
+        confidence_threshold=settings.classification_confidence_threshold,
+    )

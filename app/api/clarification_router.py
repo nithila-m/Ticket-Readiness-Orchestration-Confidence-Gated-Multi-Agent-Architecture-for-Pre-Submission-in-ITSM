@@ -14,13 +14,21 @@ from pydantic import BaseModel, Field
 
 from app.dependencies import get_clarification_service
 from app.providers.exceptions import LLMProviderError
-from app.services.clarification_service import ClarificationService
+from app.schemas.clarification import ClarificationDecision
+from app.schemas.conversation import ConversationState
+from app.schemas.pipeline import (
+    ClassificationResult,
+    CorrelationResult,
+    TerminalOutcome,
+    TicketRecord,
+)
+from app.services.clarification_service import ClarificationService, ConversationStateError
 
 router = APIRouter(prefix="/conversations", tags=["clarification"])
 
 
 class ConversationMessageRequest(BaseModel):
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=2000)
 
 
 class ConversationMessageResponse(BaseModel):
@@ -36,19 +44,20 @@ class ConversationMessageResponse(BaseModel):
     kb_outcome: str | None = None
     kb_matched_title: str | None = None
     kb_offered_resolution: str | None = None
+    # Agents 4-6 + terminal state (all optional; None until the pipeline runs)
+    kb_similarity_score: float | None = None
+    correlation: CorrelationResult | None = None
+    classification: ClassificationResult | None = None
+    ticket: TicketRecord | None = None
+    terminal_outcome: TerminalOutcome | None = None
+    review_item_id: int | None = None
+    review_reason: str | None = None
 
 
-@router.post("/{conversation_id}/messages", response_model=ConversationMessageResponse)
-async def post_message(
-        conversation_id: str,
-        body: ConversationMessageRequest,
-        service: ClarificationService = Depends(get_clarification_service),
-    ) -> ConversationMessageResponse:
-    try:
-        state, decision = await service.handle_message(conversation_id, body.message)
-    except LLMProviderError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
+def build_conversation_response(
+    state: ConversationState, decision: ClarificationDecision
+) -> ConversationMessageResponse:
+    """Shared by the message and deflection-feedback endpoints."""
     return ConversationMessageResponse(
         conversation_id=state.conversation_id,
         turn=state.turn_count,
@@ -62,4 +71,27 @@ async def post_message(
         kb_outcome=state.kb_outcome,
         kb_matched_title=state.kb_matched_title,
         kb_offered_resolution=state.kb_offered_resolution,
+        kb_similarity_score=state.kb_similarity_score if state.kb_outcome else None,
+        correlation=state.correlation,
+        classification=state.classification,
+        ticket=state.ticket,
+        terminal_outcome=state.terminal_outcome,
+        review_item_id=state.review_item_id,
+        review_reason=state.review_reason,
     )
+
+
+@router.post("/{conversation_id}/messages", response_model=ConversationMessageResponse)
+async def post_message(
+        conversation_id: str,
+        body: ConversationMessageRequest,
+        service: ClarificationService = Depends(get_clarification_service),
+    ) -> ConversationMessageResponse:
+    try:
+        state, decision = await service.handle_message(conversation_id, body.message)
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ConversationStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return build_conversation_response(state, decision)
