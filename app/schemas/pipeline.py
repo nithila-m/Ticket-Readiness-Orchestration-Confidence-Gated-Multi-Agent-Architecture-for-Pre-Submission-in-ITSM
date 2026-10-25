@@ -76,6 +76,17 @@ class TicketRecord(BaseModel):                      # Agent 6 output (canonical 
 
     validate_category = field_validator("category")(_check_category)
 
+ReviewStatus = Literal["PENDING", "APPROVED", "REJECTED"]
+
+class ReviewItem(BaseModel):                        # human review queue (confidence gate / escalation)
+    id: int
+    conversation_id: str
+    reason: str
+    status: ReviewStatus = "PENDING"
+    state_json: str                                 # ConversationState snapshot at enqueue time
+    created_at: datetime
+    resolved_at: datetime | None = None
+
 class AuditEvent(BaseModel):
     conversation_id: str
     turn: int

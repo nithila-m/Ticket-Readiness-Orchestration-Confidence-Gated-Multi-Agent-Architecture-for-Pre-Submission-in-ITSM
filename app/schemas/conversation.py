@@ -56,3 +56,6 @@ class ConversationState(BaseModel):
     classification: ClassificationResult | None = None
     ticket: TicketRecord | None = None
     terminal_outcome: TerminalOutcome | None = None
+    # Set when the conversation ended in the review queue (PENDING_REVIEW / ESCALATED).
+    review_item_id: int | None = None
+    review_reason: str | None = None

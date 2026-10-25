@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.dependencies import get_clarification_service
 from app.providers.exceptions import LLMProviderError
-from app.services.clarification_service import ClarificationService
+from app.services.clarification_service import ClarificationService, ConversationStateError
 
 router = APIRouter(prefix="/conversations", tags=["clarification"])
 
@@ -48,6 +48,8 @@ async def post_message(
         state, decision = await service.handle_message(conversation_id, body.message)
     except LLMProviderError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ConversationStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return ConversationMessageResponse(
         conversation_id=state.conversation_id,

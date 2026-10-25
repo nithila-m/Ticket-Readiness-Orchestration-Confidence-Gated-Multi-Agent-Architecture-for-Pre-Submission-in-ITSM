@@ -30,7 +30,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.schemas.pipeline import AuditEvent, TicketRecord, TicketStatus
+from app.schemas.pipeline import AuditEvent, ReviewItem, ReviewStatus, TicketRecord, TicketStatus
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tickets (
@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_conversation
     ON audit_events(conversation_id, id);
+
+CREATE TABLE IF NOT EXISTS review_queue (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id  TEXT NOT NULL,
+    reason           TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'PENDING',
+    state_json       TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    resolved_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_status
+    ON review_queue(status, id);
 """
 
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%f+00:00"
@@ -273,6 +285,77 @@ class SqliteStore:
         ]
 
     # ------------------------------------------------------------------
+    # review queue (confidence gate + escalations)
+    # ------------------------------------------------------------------
+
+    def enqueue_review_sync(self, conversation_id: str, reason: str, state_json: str) -> int:
+        """Add a PENDING review item. Returns its id."""
+        with closing(self._connect()) as conn:
+            with conn:
+                cur = conn.execute(
+                    """
+                    INSERT INTO review_queue (conversation_id, reason, status, state_json, created_at)
+                    VALUES (?, ?, 'PENDING', ?, ?)
+                    """,
+                    (conversation_id, reason, state_json, to_db_timestamp(datetime.now(timezone.utc))),
+                )
+                return cur.lastrowid
+
+    def list_reviews_sync(
+        self, status: ReviewStatus | None = "PENDING", limit: int = 100
+    ) -> list[ReviewItem]:
+        """Oldest first (a queue). `status=None` returns every status."""
+        sql = "SELECT * FROM review_queue"
+        params: list = []
+        if status is not None:
+            sql += " WHERE status = ?"
+            params.append(status)
+        sql += " ORDER BY id LIMIT ?"
+        params.append(limit)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_review_from_row(r) for r in rows]
+
+    def get_review_sync(self, review_id: int) -> ReviewItem | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT * FROM review_queue WHERE id = ?", (review_id,)).fetchone()
+        return _review_from_row(row) if row else None
+
+    def resolve_review_sync(self, review_id: int, status: ReviewStatus) -> ReviewItem:
+        """
+        PENDING -> APPROVED/REJECTED. KeyError if the id doesn't exist;
+        ValueError for any other status, or if it was already resolved.
+        """
+        if status not in ("APPROVED", "REJECTED"):
+            raise ValueError(f"cannot resolve a review as {status!r}; use APPROVED or REJECTED")
+        with closing(self._connect()) as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT status FROM review_queue WHERE id = ?", (review_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"review {review_id} not found")
+                if row["status"] != "PENDING":
+                    raise ValueError(f"review {review_id} is already {row['status']}")
+                conn.execute(
+                    "UPDATE review_queue SET status = ?, resolved_at = ? WHERE id = ?",
+                    (status, to_db_timestamp(datetime.now(timezone.utc)), review_id),
+                )
+        return self.get_review_sync(review_id)
+
+    # ------------------------------------------------------------------
+    # maintenance (scripts only)
+    # ------------------------------------------------------------------
+
+    def clear_tickets_sync(self) -> int:
+        """Delete every ticket and restart ticket numbering at 00001. Returns rows deleted."""
+        with closing(self._connect()) as conn:
+            with conn:
+                deleted = conn.execute("DELETE FROM tickets").rowcount
+                conn.execute("DELETE FROM sqlite_sequence WHERE name = 'tickets'")
+        return deleted
+
+    # ------------------------------------------------------------------
     # async wrappers (used by the API, Dispatcher and orchestrator)
     # ------------------------------------------------------------------
 
@@ -308,3 +391,29 @@ class SqliteStore:
 
     async def fetch_audit(self, conversation_id: str) -> list[AuditEvent]:
         return await asyncio.to_thread(self.fetch_audit_sync, conversation_id)
+
+    async def enqueue_review(self, conversation_id: str, reason: str, state_json: str) -> int:
+        return await asyncio.to_thread(self.enqueue_review_sync, conversation_id, reason, state_json)
+
+    async def list_reviews(
+        self, status: ReviewStatus | None = "PENDING", limit: int = 100
+    ) -> list[ReviewItem]:
+        return await asyncio.to_thread(self.list_reviews_sync, status, limit)
+
+    async def get_review(self, review_id: int) -> ReviewItem | None:
+        return await asyncio.to_thread(self.get_review_sync, review_id)
+
+    async def resolve_review(self, review_id: int, status: ReviewStatus) -> ReviewItem:
+        return await asyncio.to_thread(self.resolve_review_sync, review_id, status)
+
+
+def _review_from_row(r: sqlite3.Row) -> ReviewItem:
+    return ReviewItem(
+        id=r["id"],
+        conversation_id=r["conversation_id"],
+        reason=r["reason"],
+        status=r["status"],
+        state_json=r["state_json"],
+        created_at=datetime.fromisoformat(r["created_at"]),
+        resolved_at=datetime.fromisoformat(r["resolved_at"]) if r["resolved_at"] else None,
+    )
