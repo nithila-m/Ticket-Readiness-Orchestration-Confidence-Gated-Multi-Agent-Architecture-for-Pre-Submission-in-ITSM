@@ -19,6 +19,7 @@ either, behaviour is exactly as before.
 import time
 
 from app.agents.adaptive_clarifier import AdaptiveClarifier, was_forced_escalation
+from app.agents.completeness_scorer import score_completeness
 from app.agents.kb_deflection_agent import (
     KBDeflectionAgent,
     KBRetrievalResult,
@@ -29,6 +30,7 @@ from app.config.settings import settings
 from app.repositories.base import ConversationRepository
 from app.schemas.clarification import ClarificationDecision, ClarificationLogEntry
 from app.schemas.conversation import ConversationState, Message
+from app.schemas.extraction import ExtractedField
 from app.schemas.pipeline import AuditEvent
 from app.services.ticket_pipeline import TicketPipeline
 from app.services.transcript_formatter import format_transcript_for_extraction
@@ -41,6 +43,30 @@ ESCALATION_REASON = "clarification_escalated"
 def passes_completeness_gate(state: ConversationState) -> bool:
     """Agent 3 only runs once the request is complete enough to trust a KB match."""
     return state.completeness_score >= settings.kb_gate_completeness_threshold
+
+
+def merge_extracted_fields(
+    previous_fields: dict[str, ExtractedField],
+    previous_category: str | None,
+    new_fields: dict[str, ExtractedField],
+    new_category: str | None,
+) -> tuple[dict[str, ExtractedField], list[str]]:
+    """
+    Carry forward fields Agent 1 extracted on an earlier turn but omitted
+    this turn. A field present in the new result always wins (so a changed
+    value still reaches Agent 2 and RECHECK still works). If the category
+    changed, nothing is carried forward - the old fields belong to a
+    different profile. Returns (merged_fields, carried_forward_names).
+    """
+    if previous_category != new_category:
+        return dict(new_fields), []
+    merged = dict(new_fields)
+    carried_forward = []
+    for name, field in previous_fields.items():
+        if name not in merged:
+            merged[name] = field
+            carried_forward.append(name)
+    return merged, carried_forward
 
 
 def _feedback_turn(state: ConversationState) -> int:
@@ -144,22 +170,46 @@ class ClarificationService:
     async def extract(self, state: ConversationState) -> None:
         """
         Rerun Agent 1 on the full updated transcript (not just this message) -
-        this is what lets contradiction detection (RECHECK) work: Agent 1
-        re-extracts from scratch each turn rather than merging deltas.
+        this is what lets contradiction detection (RECHECK) work: a field the
+        new extraction returns always replaces the previous turn's value.
+
+        The new result is then merged with the previous turn's fields
+        (merge_extracted_fields): a field Agent 1 extracted earlier but
+        omitted this turn is carried forward, unless the category changed.
+        When anything was carried forward, completeness_score and
+        missing_or_uncertain_fields are recomputed on the merged fields so
+        Agent 2 doesn't re-ask an already-answered question.
         """
         start = time.perf_counter()
         transcript = format_transcript_for_extraction(state.raw_messages)
         analysis = await self._extraction_service.analyze(transcript)
 
-        state.extracted_fields = analysis.extracted_fields
+        previous_category = state.detected_category.value if state.detected_category else None
+        new_category = analysis.category.value if analysis.category else None
+        merged_fields, carried_forward = merge_extracted_fields(
+            state.extracted_fields, previous_category,
+            analysis.extracted_fields, new_category,
+        )
+
+        state.extracted_fields = merged_fields
         state.detected_category = analysis.category
-        state.completeness_score = analysis.completeness_score
-        state.missing_or_uncertain_fields = analysis.missing_or_uncertain_fields
+        if carried_forward:
+            completeness = score_completeness(new_category, merged_fields)
+            state.completeness_score = completeness.score
+            state.missing_or_uncertain_fields = completeness.missing_or_uncertain_fields
+        else:
+            # Nothing merged in: identical to scoring the new result, which
+            # TicketAnalysisService already did with score_completeness().
+            state.completeness_score = analysis.completeness_score
+            state.missing_or_uncertain_fields = analysis.missing_or_uncertain_fields
         await self._audit(
             state, state.turn_count, "extract",
-            (state.detected_category.value if state.detected_category else None) or "UNKNOWN",
+            new_category or "UNKNOWN",
             state.completeness_score,
-            {"missing_or_uncertain_fields": state.missing_or_uncertain_fields}, start,
+            {"missing_or_uncertain_fields": state.missing_or_uncertain_fields,
+             "fields": {name: {"value": f.value, "confidence": f.confidence}
+                        for name, f in state.extracted_fields.items()},
+             "carried_forward": carried_forward}, start,
         )
 
     async def check_kb(self, state: ConversationState) -> KBRetrievalResult:
