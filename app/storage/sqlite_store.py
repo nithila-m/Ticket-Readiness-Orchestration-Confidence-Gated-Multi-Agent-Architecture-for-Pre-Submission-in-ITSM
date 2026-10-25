@@ -25,6 +25,7 @@ SqliteStore also satisfies the OpenTicketPool protocol
 
 import asyncio
 import json
+import math
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -344,6 +345,64 @@ class SqliteStore:
         return self.get_review_sync(review_id)
 
     # ------------------------------------------------------------------
+    # metrics (GET /metrics)
+    # ------------------------------------------------------------------
+
+    def metrics_sync(self) -> dict:
+        """
+        Aggregates for /metrics. A conversation's outcome is its FIRST
+        "terminal" audit row - the pipeline's own decision - so a later
+        reviewer approval (which writes a second terminal row) doesn't
+        rewrite automated deflection/review rates.
+        """
+        with closing(self._connect()) as conn:
+            outcomes = dict(conn.execute(
+                """
+                SELECT decision, COUNT(*) FROM audit_events
+                WHERE id IN (SELECT MIN(id) FROM audit_events
+                             WHERE stage = 'terminal' GROUP BY conversation_id)
+                GROUP BY decision
+                """
+            ).fetchall())
+            tickets = dict(conn.execute(
+                "SELECT status, COUNT(*) FROM tickets GROUP BY status"
+            ).fetchall())
+            reviews = dict(conn.execute(
+                "SELECT status, COUNT(*) FROM review_queue GROUP BY status"
+            ).fetchall())
+            latency_rows = conn.execute(
+                "SELECT stage, latency_ms FROM audit_events WHERE stage != 'terminal' ORDER BY stage"
+            ).fetchall()
+
+        by_stage: dict[str, list[float]] = {}
+        for r in latency_rows:
+            by_stage.setdefault(r["stage"], []).append(r["latency_ms"])
+        latency = {
+            stage: {
+                "count": len(values),
+                "avg_ms": sum(values) / len(values),
+                "p95_ms": _nearest_rank(values, 0.95),
+            }
+            for stage, values in by_stage.items()
+        }
+
+        total = sum(outcomes.values())
+
+        def rate(*keys: str) -> float | None:
+            return sum(outcomes.get(k, 0) for k in keys) / total if total else None
+
+        return {
+            "conversations_completed": total,
+            "conversations_by_outcome": outcomes,
+            "deflection_rate": rate("SELF_RESOLVED"),
+            "escalation_rate": rate("ESCALATED"),
+            "review_rate": rate("PENDING_REVIEW", "ESCALATED"),
+            "tickets_by_status": tickets,
+            "reviews_by_status": reviews,
+            "latency_by_stage": latency,
+        }
+
+    # ------------------------------------------------------------------
     # maintenance (scripts only)
     # ------------------------------------------------------------------
 
@@ -405,6 +464,15 @@ class SqliteStore:
 
     async def resolve_review(self, review_id: int, status: ReviewStatus) -> ReviewItem:
         return await asyncio.to_thread(self.resolve_review_sync, review_id, status)
+
+    async def metrics(self) -> dict:
+        return await asyncio.to_thread(self.metrics_sync)
+
+
+def _nearest_rank(values: list[float], q: float) -> float:
+    """Nearest-rank percentile (no interpolation) - fine for demo-sized data."""
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
 
 
 def _review_from_row(r: sqlite3.Row) -> ReviewItem:

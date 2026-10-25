@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.clarification_router import router as clarification_router
+from app.api.tickets_router import router as tickets_router
 from app.config.settings import settings
 from app.dependencies import get_dispatcher, get_store, get_ticket_analysis_service
 from app.providers.exceptions import LLMProviderError
@@ -48,6 +49,7 @@ app.add_middleware(
 )
 
 app.include_router(clarification_router)
+app.include_router(tickets_router)
 
 
 @app.get("/health")
