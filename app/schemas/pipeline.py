@@ -37,6 +37,16 @@ class SimilarTicket(BaseModel):
     similarity: float = Field(ge=0.0, le=1.0)
     created_at: datetime | None = None
 
+class DuplicateCandidate(BaseModel):
+    """
+    What the user is shown when asked to confirm a suspected duplicate.
+    Deliberately only id, title and time: the candidate may be another
+    user's ticket, so its description and requester never leave the server.
+    """
+    ticket_id: str
+    title: str | None = None
+    created_at: datetime | None = None
+
 class CorrelationResult(BaseModel):                 # Agent 4 output (Medhini)
     outcome: Literal["DUPLICATE", "INCIDENT_CLUSTER", "NO_MATCH"]
     duplicate_of: str | None = None

@@ -2,7 +2,8 @@
 Ticket, audit, review-queue and metrics endpoints (Agents 4-6 + reviewer).
 
 The conversational loop itself stays in clarification_router.py; this
-router adds what happens around it: the user's answer to a KB deflection,
+router adds what happens around it: the user's answer to a KB deflection
+or to a suspected duplicate,
 the audit trail, the SQLite ticket store, the human review queue, and
 aggregate metrics. All collaborators come from app/dependencies.py so
 tests swap them with app.dependency_overrides.
@@ -49,6 +50,10 @@ router = APIRouter(tags=["tickets"])
 
 class DeflectionFeedbackRequest(BaseModel):
     resolved: bool
+
+
+class DuplicateFeedbackRequest(BaseModel):
+    is_duplicate: bool
 
 
 class ReviewApproveRequest(BaseModel):
@@ -133,6 +138,27 @@ async def deflection_feedback(
 ) -> ConversationMessageResponse:
     try:
         state = await service.handle_deflection_feedback(conversation_id, body.resolved)
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConversationStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return build_conversation_response(state, state.clarification_log[-1].decision)
+
+
+@router.post(
+    "/conversations/{conversation_id}/duplicate-feedback",
+    response_model=ConversationMessageResponse,
+)
+async def duplicate_feedback(
+    conversation_id: str,
+    body: DuplicateFeedbackRequest,
+    service: ClarificationService = Depends(get_clarification_service),
+) -> ConversationMessageResponse:
+    """The user's yes/no to "is this the same issue?" (Agent 4 DUPLICATE)."""
+    try:
+        state = await service.handle_duplicate_feedback(conversation_id, body.is_duplicate)
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ConversationStateError as exc:

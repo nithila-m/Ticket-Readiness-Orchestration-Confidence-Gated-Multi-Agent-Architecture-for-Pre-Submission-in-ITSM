@@ -12,7 +12,9 @@ from app.services.clarification_service import passes_completeness_gate
 END_BRANCH = "end"
 
 
-def entry_router(state: GraphState) -> Literal["message", "feedback", "review_approved"]:
+def entry_router(
+    state: GraphState,
+) -> Literal["message", "feedback", "duplicate_feedback", "review_approved"]:
     return state["entry"]
 
 
@@ -43,6 +45,14 @@ def feedback_router(state: GraphState) -> Literal["close_resolved", "correlate",
     if state["resolved"]:
         return "close_resolved"
     return "correlate" if state.get("pipeline_enabled") else END_BRANCH
+
+
+def correlation_router(state: GraphState) -> Literal["confirm_duplicate", "classify"]:
+    """A DUPLICATE is a suggestion: pause and ask the user before merging."""
+    correlation = state["conversation"].correlation
+    if correlation is not None and correlation.outcome == "DUPLICATE":
+        return "confirm_duplicate"
+    return "classify"
 
 
 def confidence_gate(state: GraphState) -> Literal["dispatch", "enqueue_review"]:

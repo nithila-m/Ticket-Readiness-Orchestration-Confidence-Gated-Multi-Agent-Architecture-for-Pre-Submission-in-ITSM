@@ -9,6 +9,8 @@ Gemini-backed extraction service /analyze uses rather than constructing
 a second one.
 """
 
+from datetime import timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -19,6 +21,7 @@ from app.schemas.conversation import ConversationState
 from app.schemas.pipeline import (
     ClassificationResult,
     CorrelationResult,
+    DuplicateCandidate,
     TerminalOutcome,
     TicketRecord,
 )
@@ -52,12 +55,31 @@ class ConversationMessageResponse(BaseModel):
     terminal_outcome: TerminalOutcome | None = None
     review_item_id: int | None = None
     review_reason: str | None = None
+    # Suspected duplicate waiting for POST .../duplicate-feedback. Only the
+    # candidate's id, title and created time are exposed (DuplicateCandidate).
+    awaiting_duplicate_confirmation: bool = False
+    duplicate_candidate: DuplicateCandidate | None = None
+    duplicate_question: str | None = None
+
+
+def duplicate_question(candidate: DuplicateCandidate) -> str:
+    """
+    The yes/no question. Times are UTC here as a fallback; the frontend
+    re-renders created_at in the browser's local time.
+    """
+    label = f"{candidate.ticket_id} - {candidate.title}" if candidate.title else candidate.ticket_id
+    opened = ""
+    if candidate.created_at is not None:
+        created = candidate.created_at
+        created = created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+        opened = f" (opened {created.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC)"
+    return f"This looks like an existing ticket: {label}{opened}. Is this the same issue?"
 
 
 def build_conversation_response(
     state: ConversationState, decision: ClarificationDecision
 ) -> ConversationMessageResponse:
-    """Shared by the message and deflection-feedback endpoints."""
+    """Shared by the message, deflection-feedback and duplicate-feedback endpoints."""
     return ConversationMessageResponse(
         conversation_id=state.conversation_id,
         turn=state.turn_count,
@@ -78,6 +100,12 @@ def build_conversation_response(
         terminal_outcome=state.terminal_outcome,
         review_item_id=state.review_item_id,
         review_reason=state.review_reason,
+        awaiting_duplicate_confirmation=state.awaiting_duplicate_confirmation,
+        duplicate_candidate=state.duplicate_candidate if state.awaiting_duplicate_confirmation else None,
+        duplicate_question=(
+            duplicate_question(state.duplicate_candidate)
+            if state.awaiting_duplicate_confirmation and state.duplicate_candidate else None
+        ),
     )
 
 

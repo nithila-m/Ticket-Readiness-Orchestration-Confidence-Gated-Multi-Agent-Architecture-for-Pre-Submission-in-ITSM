@@ -146,12 +146,35 @@ async def test_duplicate_is_merged_even_with_low_confidence(store):
     pipeline = make_pipeline(store, dup, FakeClassifier(classification(0.2)))
 
     state = await pipeline.run(make_state())
+    # A DUPLICATE now pauses for the user's confirmation first.
+    assert state.awaiting_duplicate_confirmation and state.terminal_outcome is None
+    await pipeline.apply_duplicate_answer(state, is_duplicate=True)
+    await pipeline.finish(state)
 
     assert state.terminal_outcome == "MERGED"
     assert state.ticket.status == "MERGED"
     assert state.ticket.duplicate_of == original.ticket_id
     assert state.classification is not None  # still classified for the record
     assert await store.list_reviews() == []
+
+
+async def test_duplicate_pauses_with_safe_candidate_summary(store):
+    original = await store.insert_ticket(TicketRecord(
+        conversation_id="older", title="[Wifi/Internet Support] drops", description="secret details",
+        category="wifi_internet", priority="P3", assignee_group="Network Operations",
+        routing_rationale="r", confidence_score=0.9,
+    ))
+    dup = CorrelationResult(outcome="DUPLICATE", duplicate_of=original.ticket_id, max_similarity=0.97)
+    pipeline = make_pipeline(store, dup, FakeClassifier(classification()))
+
+    state = await pipeline.run(make_state())
+
+    assert state.awaiting_duplicate_confirmation
+    assert state.ticket is None and state.classification is None
+    assert state.duplicate_candidate.model_dump() == {
+        "ticket_id": original.ticket_id, "title": original.title, "created_at": original.created_at,
+    }
+    assert [e.stage for e in await store.fetch_audit("conv-1")] == ["correlate"]
 
 
 async def test_incident_cluster_raises_priority_to_p1(store):

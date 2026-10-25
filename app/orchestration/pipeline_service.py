@@ -72,6 +72,17 @@ class GraphConversationService:
         await self._steps.save(state)
         return state
 
+    async def handle_duplicate_feedback(
+        self, conversation_id: str, is_duplicate: bool
+    ) -> ConversationState:
+        state = await self._steps.begin_duplicate_feedback(conversation_id)
+        await self._graph.ainvoke({
+            "conversation": state, "entry": "duplicate_feedback", "is_duplicate": is_duplicate,
+            **self._config(),
+        })
+        await self._steps.save(state)
+        return state
+
     async def dispatch_approved(self, state: ConversationState) -> ConversationState:
         """Entry for a reviewer-approved item: straight to the Dispatcher."""
         if self._ticket_pipeline is None:

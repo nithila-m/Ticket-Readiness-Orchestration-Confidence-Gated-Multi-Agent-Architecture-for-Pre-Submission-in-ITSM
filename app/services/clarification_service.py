@@ -11,7 +11,9 @@ propagate to the API layer rather than being silently masked here.
 
 Optional (Agents 4-6): with a TicketPipeline, READY runs the post-READY
 pipeline (only when settings.auto_dispatch_on_ready), ESCALATE goes to the
-review queue, and DEFLECTED waits for handle_deflection_feedback(). With a
+review queue, and DEFLECTED waits for handle_deflection_feedback(). A
+suspected duplicate pauses the pipeline until handle_duplicate_feedback();
+no other message or feedback is accepted meanwhile. With a
 SqliteStore, each turn's stages are written to the audit trail. Without
 either, behaviour is exactly as before.
 """
@@ -86,6 +88,16 @@ class ConversationClosedError(ConversationStateError):
     """The conversation already has a terminal outcome; it cannot take more messages."""
 
 
+AWAITING_DUPLICATE_MESSAGE = "Please answer the duplicate question first."
+
+
+class AwaitingDuplicateConfirmationError(ConversationStateError):
+    """A suspected duplicate is waiting for the user's yes/no (API: 409)."""
+
+    def __init__(self):
+        super().__init__(AWAITING_DUPLICATE_MESSAGE)
+
+
 class ClarificationService:
     def __init__(
         self,
@@ -154,6 +166,20 @@ class ClarificationService:
         await self.save(state)
         return state
 
+    async def handle_duplicate_feedback(
+        self, conversation_id: str, is_duplicate: bool
+    ) -> ConversationState:
+        """
+        The user's answer to a suspected duplicate. True -> merge as before;
+        False -> NO_MATCH (evidence kept) and continue classify -> gate ->
+        dispatch / review.
+        """
+        state = await self.begin_duplicate_feedback(conversation_id)
+        await self._ticket_pipeline.apply_duplicate_answer(state, is_duplicate)
+        await self._ticket_pipeline.finish(state)
+        await self.save(state)
+        return state
+
     # --- individual steps (the two methods above, and the LangGraph nodes
     #     in app/orchestration/nodes.py, are both built from these) -------
 
@@ -164,6 +190,8 @@ class ClarificationService:
             raise ConversationClosedError(
                 f"conversation {conversation_id!r} is closed ({state.terminal_outcome})"
             )
+        if state.awaiting_duplicate_confirmation:
+            raise AwaitingDuplicateConfirmationError()
         state.raw_messages.append(Message(role="user", content=user_message))
         return state
 
@@ -285,9 +313,26 @@ class ClarificationService:
             raise ConversationClosedError(
                 f"conversation {conversation_id!r} is closed ({state.terminal_outcome})"
             )
+        if state.awaiting_duplicate_confirmation:
+            raise AwaitingDuplicateConfirmationError()
         if not state.clarification_log or state.clarification_log[-1].decision.action != "DEFLECTED":
             raise ConversationStateError(
                 f"conversation {conversation_id!r} was not deflected to a KB article"
+            )
+        return state
+
+    async def begin_duplicate_feedback(self, conversation_id: str) -> ConversationState:
+        """Load the conversation and check it is waiting for a duplicate answer."""
+        state = await self._repository.get(conversation_id)
+        if state is None:
+            raise ConversationNotFoundError(f"conversation {conversation_id!r} not found")
+        if state.terminal_outcome is not None:
+            raise ConversationClosedError(
+                f"conversation {conversation_id!r} is closed ({state.terminal_outcome})"
+            )
+        if not state.awaiting_duplicate_confirmation or self._ticket_pipeline is None:
+            raise ConversationStateError(
+                f"conversation {conversation_id!r} is not awaiting duplicate confirmation"
             )
         return state
 

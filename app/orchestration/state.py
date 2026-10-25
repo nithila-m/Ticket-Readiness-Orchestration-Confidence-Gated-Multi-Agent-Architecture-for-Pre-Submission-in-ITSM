@@ -14,7 +14,7 @@ from app.schemas.clarification import ClarificationDecision
 from app.schemas.conversation import ConversationState
 from app.services.ticket_pipeline import GateDecision
 
-Entry = Literal["message", "feedback", "review_approved"]
+Entry = Literal["message", "feedback", "duplicate_feedback", "review_approved"]
 
 
 class GraphState(TypedDict, total=False):
@@ -22,6 +22,7 @@ class GraphState(TypedDict, total=False):
     entry: Entry
     user_message: str | None          # entry="message"
     resolved: bool | None             # entry="feedback"
+    is_duplicate: bool | None         # entry="duplicate_feedback"
     kb_result: KBRetrievalResult | None
     decision: ClarificationDecision | None
     gate: GateDecision | None

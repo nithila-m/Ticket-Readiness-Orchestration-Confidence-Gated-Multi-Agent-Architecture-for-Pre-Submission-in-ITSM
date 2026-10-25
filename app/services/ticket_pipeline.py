@@ -3,6 +3,11 @@ Post-READY ticket pipeline: Agent 4 -> Agent 5 -> confidence gate -> Agent 6.
 
   correlate  Agent 4 first: Agent 5 reads state.correlation for its
              incident-cluster -> P1 rule.
+  confirm    A DUPLICATE is only a suggestion: run() pauses with
+             awaiting_duplicate_confirmation set and no ticket. The user's
+             answer (apply_duplicate_answer) keeps the DUPLICATE or turns it
+             into NO_MATCH - keeping the evidence, without re-running the
+             cluster check - and finish() continues from classify.
   classify   Agent 5 always runs, even for a duplicate, so the merged
              ticket still records category/priority/team.
   gate       DUPLICATE -> MERGE (the gate does not apply to a merge);
@@ -28,6 +33,7 @@ from app.schemas.pipeline import (
     AuditEvent,
     ClassificationResult,
     CorrelationResult,
+    DuplicateCandidate,
     TerminalOutcome,
 )
 from app.storage.sqlite_store import SqliteStore
@@ -48,6 +54,21 @@ def confidence_gate(
     if classification.confidence < threshold:
         return "REVIEW"
     return "DISPATCH"
+
+
+def _candidate_similarity(correlation: CorrelationResult) -> float:
+    """The candidate's raw similarity from the evidence list, else max_similarity."""
+    for similar in correlation.similar_tickets:
+        if similar.ticket_id == correlation.duplicate_of:
+            return similar.similarity
+    return correlation.max_similarity
+
+
+def _candidate_created_at(correlation: CorrelationResult):
+    for similar in correlation.similar_tickets:
+        if similar.ticket_id == correlation.duplicate_of:
+            return similar.created_at
+    return None
 
 
 def _ms_since(start: float) -> float:
@@ -72,7 +93,14 @@ class TicketPipeline:
         self._threshold = confidence_threshold
 
     async def run(self, state: ConversationState) -> ConversationState:
-        await self.correlate(state)
+        correlation = await self.correlate(state)
+        if correlation.outcome == "DUPLICATE":
+            await self.ask_duplicate_confirmation(state)
+            return state
+        return await self.finish(state)
+
+    async def finish(self, state: ConversationState) -> ConversationState:
+        """Everything after Agent 4 (and after the user's duplicate answer)."""
         await self.classify(state)
         if await self.gate(state) == "REVIEW":
             await self.enqueue_review(state, LOW_CONFIDENCE_REASON, "PENDING_REVIEW")
@@ -98,6 +126,44 @@ class TicketPipeline:
             "similar_tickets": len(correlation.similar_tickets),
         }, start)
         return correlation
+
+    async def ask_duplicate_confirmation(self, state: ConversationState) -> None:
+        """
+        Pause on a DUPLICATE: remember the candidate's id, title and created
+        time only (it may be another user's ticket), for the question.
+        """
+        candidate_id = state.correlation.duplicate_of
+        existing = await self._store.get_ticket(candidate_id) if candidate_id else None
+        state.awaiting_duplicate_confirmation = True
+        state.duplicate_candidate = DuplicateCandidate(
+            ticket_id=candidate_id,
+            title=existing.title if existing else None,
+            created_at=existing.created_at if existing else _candidate_created_at(state.correlation),
+        )
+
+    async def apply_duplicate_answer(self, state: ConversationState, is_duplicate: bool) -> None:
+        """
+        The user's answer. Confirmed -> the DUPLICATE stands (merged by the
+        Dispatcher). Rejected -> NO_MATCH, keeping similar_tickets and
+        max_similarity as evidence; the cluster check is not re-run.
+        """
+        start = time.perf_counter()
+        correlation = state.correlation
+        candidate_id = correlation.duplicate_of
+        await self._audit(
+            state, "duplicate_confirmation", "CONFIRMED" if is_duplicate else "REJECTED",
+            None, {
+                "candidate_ticket_id": candidate_id,
+                "similarity": _candidate_similarity(correlation),
+            }, start, turn=state.turn_count - 1,
+        )
+        state.awaiting_duplicate_confirmation = False
+        if not is_duplicate:
+            state.correlation = CorrelationResult(
+                outcome="NO_MATCH",
+                similar_tickets=correlation.similar_tickets,
+                max_similarity=correlation.max_similarity,
+            )
 
     async def classify(self, state: ConversationState) -> ClassificationResult:
         start = time.perf_counter()
@@ -162,10 +228,11 @@ class TicketPipeline:
         confidence: float | None,
         payload: dict,
         start: float,
+        turn: int | None = None,
     ) -> None:
         await self._store.log_event(AuditEvent(
             conversation_id=state.conversation_id,
-            turn=state.turn_count,
+            turn=state.turn_count if turn is None else turn,
             stage=stage,
             decision=decision,
             confidence=confidence,
