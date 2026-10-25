@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VIT IT Service Desk — TRO Review Queue</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="header-left">
+        <div class="header-title">VIT IT Service Desk</div>
+        <div class="header-subtitle">TRO Review Queue · low-confidence and escalated requests</div>
+      </div>
+      <div class="header-right">
+        <a href="index.html" class="btn-ghost" title="Back to the chat assistant">← Chat</a>
+      </div>
+    </header>
+
+    <main class="chat-shell">
+      <div class="review-toolbar">
+        <label for="statusFilter">Show</label>
+        <select id="statusFilter">
+          <option value="PENDING" selected>Pending</option>
+          <option value="APPROVED">Approved</option>
+          <option value="REJECTED">Rejected</option>
+          <option value="ALL">All</option>
+        </select>
+        <button id="refreshBtn" type="button" class="btn-secondary">↻ Refresh</button>
+        <span id="queueCount" class="status-label" style="color: var(--text-muted);"></span>
+      </div>
+
+      <div id="reviewList"></div>
+    </main>
+  </div>
+
+  <script src="reviewer.js"></script>
+</body>
+</html>

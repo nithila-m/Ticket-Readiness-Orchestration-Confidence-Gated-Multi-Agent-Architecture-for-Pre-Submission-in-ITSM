@@ -1,5 +1,7 @@
-// TRO Chatbot frontend — talks ONLY to the existing ClarificationService
-// endpoint. No extraction, scoring, or clarification logic lives here.
+// TRO Chatbot frontend — talks ONLY to the backend API (conversation,
+// deflection-feedback and audit endpoints). No extraction, scoring,
+// clarification or routing logic lives here; it only renders what the
+// server decided. Every server value goes through escapeHtml().
 
 const API_BASE = ""; // same-origin when served from FastAPI (see main.py mount)
 
@@ -24,6 +26,13 @@ const CATEGORY_LABELS = {
 };
 
 const GENERIC_QUICK_REPLIES = ["Yes", "No", "Not sure"];
+
+// Human wording for review-queue reasons (app/services/ticket_pipeline.py,
+// app/services/clarification_service.py). Unknown reasons are shown as-is.
+const REVIEW_REASON_LABELS = {
+  low_classification_confidence: "the automatic routing wasn't confident enough",
+  clarification_escalated: "we couldn't gather enough detail in the chat",
+};
 
 // ---- State ----
 let conversationId = null;
@@ -139,6 +148,9 @@ async function sendTurn(text) {
   addUserMessage(text);
   el.composerInput.value = "";
   el.quickReplies.classList.add("hidden");
+  // A new message supersedes any open KB suggestion (and its feedback buttons).
+  el.completionCard.classList.add("hidden");
+  el.completionCard.innerHTML = "";
   setComposerEnabled(false);
 
   const typingEl = addTypingIndicator();
@@ -181,9 +193,21 @@ async function sendTurn(text) {
 function handleResponse(data) {
   updateTurnBadge(data.turn);
 
+  // Agents 4-6 already reached a final outcome this turn (ticket created,
+  // merged, sent to review, ...): show it and close the conversation.
+  if (data.terminal_outcome) {
+    addAssistantMessage(outcomeIntro(data), data);
+    showOutcomeCard(data);
+    endConversationInput();
+    return;
+  }
+
   switch (data.action) {
     case "ASK_CLARIFICATION":
       addAssistantMessage(data.question, data);
+      if (data.kb_outcome === "WEAK_MATCH" && data.kb_matched_title) {
+        addKbHint(data.kb_matched_title);
+      }
       renderQuickReplies();
       setComposerEnabled(true);
       break;
@@ -215,18 +239,238 @@ function handleResponse(data) {
       break;
 
     case "DEFLECTED":
+      // Not final yet: the user's feedback decides between SELF_RESOLVED
+      // and creating a ticket, so the composer stays usable.
       addAssistantMessage(
         "Good news — I found a knowledge base article that should resolve this without needing a ticket:",
         data
       );
       showCompletionCard("resolved", data);
-      endConversationInput();
+      addFeedbackButtons();
+      setComposerEnabled(true);
       break;
 
     default:
       addErrorMessage(`Unrecognized action from server: ${data.action}`);
       setComposerEnabled(true);
   }
+}
+
+// ---- Deflection feedback ----
+function addFeedbackButtons() {
+  const row = document.createElement("div");
+  row.className = "feedback-row";
+  row.innerHTML = `
+    <span>Did this fix your issue?</span>
+    <button type="button" class="btn-primary" data-resolved="true">That fixed it</button>
+    <button type="button" class="btn-secondary" data-resolved="false">Still not working</button>
+  `;
+  row.querySelectorAll("button").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      sendDeflectionFeedback(btn.dataset.resolved === "true", btn.textContent)
+    )
+  );
+  el.completionCard.appendChild(row);
+}
+
+async function sendDeflectionFeedback(resolved, label) {
+  if (isBusy || isConversationOver) return;
+  isBusy = true;
+  const buttons = el.completionCard.querySelectorAll(".feedback-row button");
+  buttons.forEach((b) => (b.disabled = true));
+  setComposerEnabled(false);
+  addUserMessage(label);
+  const typingEl = addTypingIndicator();
+
+  try {
+    const res = await fetch(
+      `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/deflection-feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolved }),
+      }
+    );
+    removeTypingIndicator(typingEl);
+    const body = await safeJson(res);
+
+    if (!res.ok) {
+      addErrorMessage(`Request failed (${res.status}): ${body?.detail || res.statusText}`);
+      buttons.forEach((b) => (b.disabled = false));
+      setComposerEnabled(true);
+    } else if (body.terminal_outcome) {
+      addAssistantMessage(outcomeIntro(body), null);
+      showOutcomeCard(body);
+      endConversationInput();
+    } else {
+      // No ticket pipeline configured on the server - nothing more to show.
+      addAssistantMessage("Thanks for letting us know.", null);
+      setComposerEnabled(true);
+    }
+  } catch (err) {
+    removeTypingIndicator(typingEl);
+    addErrorMessage(`Couldn't reach the server: ${err.message}`);
+    buttons.forEach((b) => (b.disabled = false));
+    setComposerEnabled(true);
+  }
+  isBusy = false;
+}
+
+// ---- Final outcomes (Agents 4-6) ----
+function outcomeIntro(data) {
+  switch (data.terminal_outcome) {
+    case "DISPATCHED":
+      return "Your ticket has been created and routed to the right team.";
+    case "MERGED":
+      return "This looks like an issue that's already been reported, so I've linked your report to the existing ticket.";
+    case "PENDING_REVIEW":
+    case "ESCALATED":
+      return "I've passed this to a specialist for review.";
+    case "SELF_RESOLVED":
+      return "Great — glad the article sorted it out!";
+    default:
+      return "Your request has been recorded.";
+  }
+}
+
+function showOutcomeCard(data) {
+  const outcome = data.terminal_outcome;
+  let html;
+
+  if (outcome === "DISPATCHED" || outcome === "MERGED") {
+    html = ticketCardHtml(data);
+    el.completionCard.className = "completion-card ready";
+  } else if (outcome === "PENDING_REVIEW" || outcome === "ESCALATED") {
+    const reason = data.review_reason
+      ? REVIEW_REASON_LABELS[data.review_reason] || data.review_reason
+      : "it needs a closer look";
+    html = `
+      <h3>🧑‍💼 A specialist will review this request</h3>
+      <div class="row"><span>Why</span><span>${escapeHtml(reason)}</span></div>
+      ${data.review_item_id != null
+        ? `<div class="row"><span>Review item</span><span>#${escapeHtml(String(data.review_item_id))}</span></div>`
+        : ""}
+    `;
+    el.completionCard.className = "completion-card escalated";
+  } else {
+    html = `
+      <h3>📚 Resolved via Knowledge Base</h3>
+      ${data.kb_matched_title
+        ? `<div class="row"><span>Article</span><span>${escapeHtml(data.kb_matched_title)}</span></div>`
+        : ""}
+      <div class="row"><span>Ticket</span><span>none needed</span></div>
+    `;
+    el.completionCard.className = "completion-card resolved";
+  }
+
+  el.completionCard.innerHTML = html;
+  el.completionCard.appendChild(auditTrailBlock());
+  el.completionCard.classList.remove("hidden");
+  scrollToBottom();
+}
+
+function ticketCardHtml(data) {
+  const t = data.ticket || {};
+  const categoryLabel = CATEGORY_LABELS[t.category] || t.category || "—";
+  const merged = data.terminal_outcome === "MERGED";
+  const incident = data.correlation && data.correlation.outcome === "INCIDENT_CLUSTER";
+  const jiraUrl = safeHttpUrl(t.external_url);
+
+  return `
+    <h3>${merged ? "🔗 Linked to an existing ticket" : "✅ Ticket created"}</h3>
+    ${incident
+      ? `<div class="notice">⚠ Part of an ongoing incident — other users have reported the same problem.</div>`
+      : ""}
+    ${merged && t.duplicate_of
+      ? `<div class="notice">Linked to existing ticket <strong>${escapeHtml(t.duplicate_of)}</strong></div>`
+      : ""}
+    <div class="row"><span>Ticket ID</span><span>${escapeHtml(t.ticket_id || "—")}</span></div>
+    <div class="row"><span>Priority</span><span>${escapeHtml(t.priority || "—")}</span></div>
+    <div class="row"><span>Team</span><span>${escapeHtml(t.assignee_group || "—")}</span></div>
+    <div class="row"><span>Category</span><span>${escapeHtml(categoryLabel)}</span></div>
+    <div class="rationale"><strong>Why this team:</strong> ${escapeHtml(t.routing_rationale || "—")}</div>
+    ${jiraUrl
+      ? `<a class="jira-link" href="${escapeHtml(jiraUrl)}" target="_blank" rel="noopener">Open in Jira (${escapeHtml(t.external_key || "")}) ↗</a>`
+      : ""}
+  `;
+}
+
+// Only http(s) links are rendered - escapeHtml alone would not stop a
+// "javascript:" URL in an href.
+function safeHttpUrl(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---- Audit trail ----
+function auditTrailBlock() {
+  const wrap = document.createElement("div");
+  wrap.className = "audit-wrap";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "reasoning-toggle";
+  toggle.textContent = "📋 Show audit trail";
+  const panel = document.createElement("div");
+  panel.className = "audit-panel hidden";
+
+  toggle.addEventListener("click", async () => {
+    const opening = panel.classList.contains("hidden");
+    panel.classList.toggle("hidden");
+    toggle.textContent = opening ? "📋 Hide audit trail" : "📋 Show audit trail";
+    if (opening) await loadAuditTrail(panel);
+  });
+
+  wrap.appendChild(toggle);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+async function loadAuditTrail(panel) {
+  panel.textContent = "Loading…";
+  try {
+    const res = await fetch(
+      `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/audit`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const events = await res.json();
+    if (!events.length) {
+      panel.textContent = "No audit events recorded.";
+      return;
+    }
+    panel.innerHTML = `
+      <table class="audit-table">
+        <thead><tr><th>Turn</th><th>Stage</th><th>Decision</th><th>Confidence</th><th>ms</th></tr></thead>
+        <tbody>${events
+          .map(
+            (e) => `<tr>
+              <td>${escapeHtml(String(e.turn))}</td>
+              <td>${escapeHtml(e.stage)}</td>
+              <td>${escapeHtml(e.decision)}</td>
+              <td>${e.confidence == null ? "—" : escapeHtml(e.confidence.toFixed(2))}</td>
+              <td>${escapeHtml(Number(e.latency_ms || 0).toFixed(1))}</td>
+            </tr>`
+          )
+          .join("")}</tbody>
+      </table>`;
+  } catch (err) {
+    panel.textContent = `Couldn't load the audit trail: ${err.message}`;
+  }
+}
+
+function addKbHint(title) {
+  const row = document.createElement("div");
+  row.className = "msg-row assistant";
+  const hint = document.createElement("div");
+  hint.className = "kb-hint";
+  hint.innerHTML = `💡 You might also check: <strong>${escapeHtml(title)}</strong>`;
+  row.appendChild(hint);
+  el.messages.appendChild(row);
+  scrollToBottom();
 }
 
 function endConversationInput() {
@@ -349,7 +593,7 @@ function showCompletionCard(kind, data) {
     kind === "ready"
       ? "✅ Ticket Ready"
       : kind === "resolved"
-      ? "📚 Resolved via Knowledge Base"
+      ? "📚 Suggested fix from the Knowledge Base"
       : "🧑‍💼 Escalated to Human Support";
   const categoryLabel = data.category
     ? CATEGORY_LABELS[data.category] || data.category
@@ -399,7 +643,9 @@ async function safeJson(res) {
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
-  return div.innerHTML;
+  // innerHTML leaves quotes alone; escape them too so values are safe
+  // inside attributes (href="...", value="...").
+  return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 init();
