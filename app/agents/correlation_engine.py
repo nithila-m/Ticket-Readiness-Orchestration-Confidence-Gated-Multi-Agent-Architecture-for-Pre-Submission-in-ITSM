@@ -6,8 +6,8 @@ them by cosine similarity and applies fixed threshold rules. There is no
 LLM call and no learned model beyond the sentence embedder.
 
 Decision order:
-  1. DUPLICATE        best eligible open ticket scores >= dup_threshold
-                      (see the category rule below) -> duplicate_of it.
+  1. DUPLICATE        the best-ranked eligible open ticket whose RAW cosine
+                      similarity is >= dup_threshold -> duplicate_of it.
   2. INCIDENT_CLUSTER at least cluster_min_count tickets, counting the
                       incoming one, that score >= cluster_threshold, are in
                       the same building and were created within
@@ -45,7 +45,10 @@ Category rule: Agent 4 runs before Agent 5, so Agent 1's category may
 differ from the category stored on open tickets. Category is therefore a
 scoring signal, not a filter: when both are known and agree, the score is
 the cosine similarity + category_agreement_bonus (capped at 1.0);
-otherwise the score is the plain similarity. A duplicate across different
+otherwise the score is the plain similarity. The score only RANKS
+candidates and decides cluster membership: the DUPLICATE threshold is
+compared with the raw similarity, because the bonus pushed every
+same-category look-alike to 1.0 on live text. A duplicate across different
 categories additionally needs raw similarity >= cross_category_dup_threshold.
 
 Evidence: similar_tickets carries up to 5 tickets with their RAW cosine
@@ -249,7 +252,9 @@ class CorrelationEngine:
         dup_candidates = scored if query_field_count(state) >= self.dup_min_fields else []
         for score, raw, agrees, ticket in dup_candidates:
             if score < self.dup_threshold:
-                break
+                break  # ranked by score >= raw: nothing further down can pass
+            if raw < self.dup_threshold:
+                continue  # the threshold applies to raw cosine; the bonus only ranks
             field_lines = correlation_field_lines(ticket.correlation_text)
             if field_lines is not None and field_lines < self.dup_min_fields:
                 continue

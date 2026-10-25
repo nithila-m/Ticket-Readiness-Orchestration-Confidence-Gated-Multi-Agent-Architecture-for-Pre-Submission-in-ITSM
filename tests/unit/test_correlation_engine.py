@@ -140,10 +140,25 @@ async def test_duplicate_allowed_when_incoming_building_unknown():
 
 # --- category: signal, not filter ----------------------------------------------------
 
-async def test_category_agreement_bonus_can_lift_score_over_dup_threshold():
+async def test_category_agreement_bonus_does_not_lift_raw_over_dup_threshold():
     result = await engine().check(state(), FakePool([ticket("T1", 0.82)]))
-    assert result.outcome == "DUPLICATE"  # 0.82 + 0.05 bonus >= 0.85
+    assert result.outcome != "DUPLICATE"  # 0.82 + 0.05 bonus >= 0.85, but raw 0.82 < 0.85
     assert result.similar_tickets[0].similarity == 0.82  # evidence reports raw similarity
+
+
+async def test_dup_threshold_applies_to_raw_cosine():
+    below = await engine(dup_threshold=0.95).check(state(), FakePool([ticket("T1", 0.94)]))
+    assert below.outcome != "DUPLICATE"  # raw 0.94 + bonus 0.05 = 0.99, still not a duplicate
+
+    above = await engine(dup_threshold=0.95).check(state(), FakePool([ticket("T1", 0.96)]))
+    assert above.outcome == "DUPLICATE" and above.duplicate_of == "T1"
+
+
+async def test_bonus_still_ranks_candidates_for_duplicate():
+    pool = FakePool([ticket("OTHER", 0.97, category="vit_email"), ticket("SAME", 0.96)])
+    result = await engine(dup_threshold=0.95).check(state(), pool)
+    # SAME ranks first (0.96 + 0.05 > 0.97) and its raw 0.96 passes the threshold.
+    assert result.duplicate_of == "SAME"
 
 
 async def test_cross_category_duplicate_needs_very_high_similarity():
