@@ -45,27 +45,27 @@ All values are raw cosine, the value the DUPLICATE decision now uses.
 
 ### Per duplicate
 
-| query | original | raw (decision) | ranking score | gate allows | category agrees | original ranked first | top candidate | caught at 0.95 | caught at 0.83 (suggestion rule) |
+| query | original | raw (decision) | ranking score | gate allows | category agrees | original ranked first | top candidate | caught at 0.87 | caught at 0.83 (suggestion rule) |
 |---|---|---|---|---|---|---|---|---|---|
 | CAL-DUP-16 | ADA-007 | 0.7628 | 0.8128 | no | yes | yes | ADA-007 (0.8128) | no (NO_MATCH) | no (NO_MATCH) |
 | CAL-DUP-25 | PRN-024 | 0.7696 | 0.8196 | yes | yes | yes | PRN-024 (0.8196) | no (NO_MATCH) | no (NO_MATCH) |
 | CAL-DUP-24 | PRN-011 | 0.8178 | 0.8678 | yes | yes | yes | PRN-011 (0.8678) | no (NO_MATCH) | no (NO_MATCH) |
 | CAL-DUP-14 | EMAIL-021 | 0.8331 | 0.8831 | yes | yes | yes | EMAIL-021 (0.8831) | no (INCIDENT_CLUSTER) | yes |
 | CAL-DUP-03 | WIFI-023 | 0.8601 | 0.9101 | yes | yes | yes | WIFI-023 (0.9101) | no (NO_MATCH) | yes |
-| CAL-DUP-15 | EMAIL-011 | 0.8765 | 0.9265 | yes | yes | yes | EMAIL-011 (0.9265) | no (NO_MATCH) | yes |
-| CAL-DUP-13 | EMAIL-024 | 0.8772 | 0.9272 | yes | yes | yes | EMAIL-024 (0.9272) | no (NO_MATCH) | yes |
-| CAL-DUP-08 | TEAMS-021 | 0.8775 | 0.9275 | yes | yes | yes | TEAMS-021 (0.9275) | no (NO_MATCH) | yes |
-| AUG-DUP-01 | WIFI-002 | 0.8808 | 0.9308 | yes | yes | yes | WIFI-002 (0.9308) | no (NO_MATCH) | yes |
-| CAL-DUP-06 | TEAMS-014 | 0.8879 | 0.9379 | yes | yes | yes | TEAMS-014 (0.9379) | no (NO_MATCH) | yes |
-| CAL-DUP-02 | WIFI-005 | 0.8948 | 0.9448 | yes | yes | yes | WIFI-005 (0.9448) | no (INCIDENT_CLUSTER) | yes |
-| CAL-DUP-22 | PRN-021 | 0.8959 | 0.9459 | yes | yes | yes | PRN-021 (0.9459) | no (NO_MATCH) | yes |
-| CAL-DUP-11 | EMAIL-003 | 0.8997 | 0.9497 | yes | yes | yes | EMAIL-003 (0.9497) | no (NO_MATCH) | yes |
-| CAL-DUP-07 | TEAMS-027 | 0.9023 | 0.9523 | yes | yes | yes | TEAMS-027 (0.9523) | no (INCIDENT_CLUSTER) | yes |
-| CAL-DUP-20 | ADA-017 | 0.9095 | 0.9595 | yes | yes | yes | ADA-017 (0.9595) | no (NO_MATCH) | yes |
-| CAL-DUP-09 | TEAMS-024 | 0.9330 | 0.9830 | yes | yes | yes | TEAMS-024 (0.9830) | no (NO_MATCH) | yes |
-| CAL-DUP-19 | ADA-020 | 0.9362 | 0.9862 | yes | yes | yes | ADA-020 (0.9862) | no (NO_MATCH) | yes |
-| CAL-DUP-12 | EMAIL-014 | 0.9436 | 0.9936 | yes | yes | yes | EMAIL-014 (0.9936) | no (NO_MATCH) | yes |
-| AUG-DUP-02 | TEAMS-005 | 0.9485 | 0.9985 | yes | yes | yes | TEAMS-005 (0.9985) | no (INCIDENT_CLUSTER) | yes |
+| CAL-DUP-15 | EMAIL-011 | 0.8765 | 0.9265 | yes | yes | yes | EMAIL-011 (0.9265) | yes | yes |
+| CAL-DUP-13 | EMAIL-024 | 0.8772 | 0.9272 | yes | yes | yes | EMAIL-024 (0.9272) | yes | yes |
+| CAL-DUP-08 | TEAMS-021 | 0.8775 | 0.9275 | yes | yes | yes | TEAMS-021 (0.9275) | yes | yes |
+| AUG-DUP-01 | WIFI-002 | 0.8808 | 0.9308 | yes | yes | yes | WIFI-002 (0.9308) | yes | yes |
+| CAL-DUP-06 | TEAMS-014 | 0.8879 | 0.9379 | yes | yes | yes | TEAMS-014 (0.9379) | yes | yes |
+| CAL-DUP-02 | WIFI-005 | 0.8948 | 0.9448 | yes | yes | yes | WIFI-005 (0.9448) | yes | yes |
+| CAL-DUP-22 | PRN-021 | 0.8959 | 0.9459 | yes | yes | yes | PRN-021 (0.9459) | yes | yes |
+| CAL-DUP-11 | EMAIL-003 | 0.8997 | 0.9497 | yes | yes | yes | EMAIL-003 (0.9497) | yes | yes |
+| CAL-DUP-07 | TEAMS-027 | 0.9023 | 0.9523 | yes | yes | yes | TEAMS-027 (0.9523) | yes | yes |
+| CAL-DUP-20 | ADA-017 | 0.9095 | 0.9595 | yes | yes | yes | ADA-017 (0.9595) | yes | yes |
+| CAL-DUP-09 | TEAMS-024 | 0.9330 | 0.9830 | yes | yes | yes | TEAMS-024 (0.9830) | yes | yes |
+| CAL-DUP-19 | ADA-020 | 0.9362 | 0.9862 | yes | yes | yes | ADA-020 (0.9862) | yes | yes |
+| CAL-DUP-12 | EMAIL-014 | 0.9436 | 0.9936 | yes | yes | yes | EMAIL-014 (0.9936) | yes | yes |
+| AUG-DUP-02 | TEAMS-005 | 0.9485 | 0.9985 | yes | yes | yes | TEAMS-005 (0.9985) | yes | yes |
 | CAL-DUP-04 | WIFI-011 | 0.9576 | 1.0000 | yes | yes | yes | WIFI-011 (1.0000) | yes | yes |
 | CAL-DUP-01 | WIFI-021 | 0.9576 | 1.0000 | yes | yes | yes | WIFI-021 (1.0000) | yes | yes |
 | AUG-DUP-05 | PRN-003 | 0.9627 | 1.0000 | yes | yes | yes | PRN-003 (1.0000) | yes | yes |
@@ -103,7 +103,7 @@ All values are raw cosine, the value the DUPLICATE decision now uses.
 | dup t | thin queries | thin positives | DUP FP total | FP with thin query | FP with thin matched ticket | FP with either thin | missed positives with thin text |
 |---|---|---|---|---|---|---|---|
 | 0.83 | 38 | 0 | 57 | 0 | 0 | 0 | 1 |
-| 0.95 | 38 | 0 | 7 | 0 | 0 | 0 | 1 |
+| 0.87 | 38 | 0 | 37 | 0 | 0 | 0 | 1 |
 | 0.98 | 38 | 0 | 1 | 0 | 0 | 0 | 1 |
 
 ## 4. Sweep
@@ -119,8 +119,9 @@ Every 0.05 plus the current default and the chosen value; the full 0.01 sweep is
 | 0.80 | 28 / 76 / 2 | 0.27 / 0.93 / 0.42 | 3 / 2 / 4 / 7 | 27 (22.1%) | 33 | 1 | 10 (8.2%) | 0.21 / 0.15 / 0.18 |
 | 0.83 (suggestion rule) | 27 / 57 / 3 | 0.32 / 0.90 / 0.47 | 2 / 2 / 2 / 5 | 18 (14.8%) | 28 | 3 | 14 (11.5%) | 0.15 / 0.15 / 0.15 |
 | 0.85 | 26 / 50 / 4 | 0.34 / 0.87 / 0.49 | 2 / 2 / 2 / 4 | 15 (12.3%) | 25 | 3 | 15 (12.3%) | 0.17 / 0.20 / 0.19 |
+| 0.87 (current) | 25 / 37 / 5 | 0.40 / 0.83 / 0.54 | 2 / 1 / 2 / 4 | 11 (9.0%) | 17 | 3 | 17 (13.9%) | 0.25 / 0.35 / 0.29 |
 | 0.90 | 17 / 19 / 13 | 0.47 / 0.57 / 0.52 | 1 / 1 / 0 / 3 | 5 (4.1%) | 9 | 4 | 19 (15.6%) | 0.32 / 0.60 / 0.42 |
-| 0.95 (current) | 11 / 7 / 19 | 0.61 / 0.37 / 0.46 | 0 / 0 / 0 / 2 | 2 (1.6%) | 3 | 6 | 19 (15.6%) | 0.33 / 0.70 / 0.44 |
+| 0.95 (previous default) | 11 / 7 / 19 | 0.61 / 0.37 / 0.46 | 0 / 0 / 0 / 2 | 2 (1.6%) | 3 | 6 | 19 (15.6%) | 0.33 / 0.70 / 0.44 |
 | 0.98 (chosen) | 3 / 1 / 27 | 0.75 / 0.10 / 0.18 | 0 / 0 / 0 / 0 | 1 (0.8%) | 0 | 6 | 20 (16.4%) | 0.32 / 0.75 / 0.45 |
 
 ## 5. Recommendation
@@ -140,7 +141,7 @@ Judgements behind the rules:
 
 4. **Margin at 0.98:** lowest true-original score still caught = 0.9831; highest top score among hard negatives + background = 0.9821 (TEAMS-013); highest among all non-duplicates (cluster members included) = 0.9821 (TEAMS-013).
 
-**Recommended dup_threshold: 0.98** (recommendation only; `corr_dup_threshold` is unchanged).
+Strict-rule threshold: 0.98 (not adopted - see section 7).
 
 ### Suggestion rule
 
@@ -151,17 +152,18 @@ The highest is **0.83**: recall 0.9000 (27/30), 57 wrong suggestions = **28.5 pe
 
 Margin at 0.83: lowest true-original raw score still caught = 0.8331; highest eligible raw score among hard negatives + background = 0.9821 (TEAMS-013).
 
-**Suggestion-rule threshold: 0.83** (recommendation only; `corr_dup_threshold` is unchanged).
+Suggestion-rule threshold: 0.83 (not adopted - see section 7).
 
 ### Cluster-threshold issue (not affected by the duplicate threshold)
 
-At the current default, INCIDENT_CLUSTER is called on 6 hard negative(s) (building 3, time 1, category 1, near-miss 1) and 19 background ticket(s). These need a cluster-threshold sweep on the live format, which is out of scope here.
+At the current default, INCIDENT_CLUSTER is called on 3 hard negative(s) (building 1, time 0, category 1, near-miss 1) and 17 background ticket(s). These need a cluster-threshold sweep on the live format, which is out of scope here.
 
 ## 6. Comparison with the current default
 
 | dup t | DUP TP / FP / FN | DUP P / R / F1 | hard-neg DUP FP (bld / time / cat / near-miss) | background DUP FP | cluster members -> DUP | hard-neg CLUSTER FP | background CLUSTER FP | INCIDENT_CLUSTER P / R / F1 |
 |---|---|---|---|---|---|---|---|---|
-| 0.95 (current) | 11 / 7 / 19 | 0.61 / 0.37 / 0.46 | 0 / 0 / 0 / 2 | 2 (1.6%) | 3 | 6 | 19 (15.6%) | 0.33 / 0.70 / 0.44 |
+| 0.87 (current) | 25 / 37 / 5 | 0.40 / 0.83 / 0.54 | 2 / 1 / 2 / 4 | 11 (9.0%) | 17 | 3 | 17 (13.9%) | 0.25 / 0.35 / 0.29 |
+| 0.95 (previous default) | 11 / 7 / 19 | 0.61 / 0.37 / 0.46 | 0 / 0 / 0 / 2 | 2 (1.6%) | 3 | 6 | 19 (15.6%) | 0.33 / 0.70 / 0.44 |
 | 0.98 (chosen) | 3 / 1 / 27 | 0.75 / 0.10 / 0.18 | 0 / 0 / 0 / 0 | 1 (0.8%) | 0 | 6 | 20 (16.4%) | 0.32 / 0.75 / 0.45 |
 | 0.83 (suggestion rule) | 27 / 57 / 3 | 0.32 / 0.90 / 0.47 | 2 / 2 / 2 / 5 | 18 (14.8%) | 28 | 3 | 14 (11.5%) | 0.15 / 0.15 / 0.15 |
 
@@ -186,8 +188,34 @@ Where the wrong DUPLICATE calls come from:
 | 0.83 | cluster_member matched a hard_negative_near_miss ticket | 1 |
 | 0.83 | cluster_member matched a cluster_member ticket | 1 |
 | 0.83 | hard_negative_building matched a cluster member | 1 |
-| 0.95 | background matched a background ticket | 2 |
-| 0.95 | cluster member matched its cluster's outside-window hard negative | 2 |
-| 0.95 | hard_negative_near_miss matched a background ticket | 2 |
-| 0.95 | cluster member matched a sibling in its own cluster | 1 |
+| 0.87 | background matched a background ticket | 8 |
+| 0.87 | cluster member matched a sibling in its own cluster | 7 |
+| 0.87 | cluster member matched its cluster's outside-window hard negative | 4 |
+| 0.87 | hard_negative_near_miss matched a background ticket | 4 |
+| 0.87 | cluster_member matched a background ticket | 3 |
+| 0.87 | background matched a cluster_member ticket | 2 |
+| 0.87 | hard_negative_category matched a background ticket | 2 |
+| 0.87 | hard_negative_time matched a background ticket | 1 |
+| 0.87 | background matched a duplicate ticket | 1 |
+| 0.87 | hard_negative_building matched a hard_negative_near_miss ticket | 1 |
+| 0.87 | cluster_member matched a hard_negative_near_miss ticket | 1 |
+| 0.87 | cluster_member matched a cluster_member ticket | 1 |
+| 0.87 | hard_negative_building matched a cluster member | 1 |
+| 0.87 | cluster_member matched a duplicate ticket | 1 |
 | 0.98 | background matched a background ticket | 1 |
+
+## 7. Adopted threshold
+
+`corr_dup_threshold` = **0.87** (app/config/settings.py; previously 0.95). Neither mechanical rule's value is used; the choice is the knee of the recall curve.
+
+| threshold | duplicates caught | wrong suggestions | per 100 non-duplicates | note |
+|---|---|---|---|---|
+| 0.83 | 27/30 | 57 | 28.5 | suggestion rule; asks too often |
+| 0.87 | 25/30 | 37 | 18.5 | adopted: last value before recall drops sharply |
+| 0.89 | 20/30 | 29 | 14.5 | recall 0.83 -> 0.67 within 0.02 (0.88 alone loses 3 duplicates) |
+| 0.95 | 11/30 | 7 | 3.5 | previous default; misses most duplicates |
+
+- Why 0.87: going from 0.83 to 0.87 removes 20 wrong suggestions and costs only 2 real duplicates; above 0.87 every step loses real duplicates quickly.
+- Why not 0.98 (strict rule): it catches 3 of 30 duplicates and its margin (0.001) is noise, not a real separation.
+- Wrong suggestions were measured on a deliberately hard set built to be full of look-alikes; they are not an expected live rate.
+- A wrong suggestion now costs the user one Yes/No question, not a wrong merge - the trade-off the confirmation step exists for.

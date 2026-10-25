@@ -123,6 +123,26 @@ HARD_NEGATIVE_TYPES = {
 }
 MAX_BACKGROUND_DUP_FP_RATE = 0.01
 SUGGESTION_MIN_RECALL = 0.90
+PREVIOUS_DUP_THRESHOLD = 0.95  # default before the live calibration
+
+# The adopted value is a human judgement on top of the two mechanical rules;
+# the numbers in its table are recomputed from the sweep on every run.
+ADOPTED_COMPARISON = {
+    0.83: "suggestion rule; asks too often",
+    0.87: "adopted: last value before recall drops sharply",
+    0.89: "recall 0.83 -> 0.67 within 0.02 (0.88 alone loses 3 duplicates)",
+    0.95: "previous default; misses most duplicates",
+}
+ADOPTED_NOTES = [
+    "Why 0.87: going from 0.83 to 0.87 removes 20 wrong suggestions and costs only 2 real "
+    "duplicates; above 0.87 every step loses real duplicates quickly.",
+    "Why not 0.98 (strict rule): it catches 3 of 30 duplicates and its margin (0.001) is noise, "
+    "not a real separation.",
+    "Wrong suggestions were measured on a deliberately hard set built to be full of look-alikes; "
+    "they are not an expected live rate.",
+    "A wrong suggestion now costs the user one Yes/No question, not a wrong merge - the trade-off "
+    "the confirmation step exists for.",
+]
 THIN_FIELD_COUNT = 1  # "thin text" = at most this many non-null fields
 
 
@@ -742,7 +762,8 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
                      f"| {tb['dup_fp_thin_query']} | {tb['dup_fp_thin_match']} | {tb['dup_fp_thin_either']} "
                      f"| {tb['missed_positives_thin']} |")
 
-    shown = sorted({round(0.60 + 0.05 * i, 2) for i in range(8)} | {current} | set(extra))
+    shown = sorted({round(0.60 + 0.05 * i, 2) for i in range(8)} | {current, PREVIOUS_DUP_THRESHOLD}
+                   | set(extra))
     lines += [
         "",
         "## 4. Sweep",
@@ -762,6 +783,8 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
             tags.append("suggestion rule")
         if t == current:
             tags.append("current")
+        if t == PREVIOUS_DUP_THRESHOLD and t != current:
+            tags.append("previous default")
         lines.append(_fmt_row(by_t[t], f" ({', '.join(tags)})" if tags else ""))
 
     lines += ["", "## 5. Recommendation", "", "### Strict rule", "",
@@ -786,8 +809,7 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
             f"{hn_val:.4f} ({hn_id}); highest among all non-duplicates (cluster members included) = "
             f"{nd_val:.4f} ({nd_id}).",
             "",
-            f"**Recommended dup_threshold: {chosen['dup_threshold']:.2f}** (recommendation only; "
-            "`corr_dup_threshold` is unchanged).",
+            f"Strict-rule threshold: {chosen['dup_threshold']:.2f} (not adopted - see section 7).",
         ]
     else:
         lines.append("**No threshold is recommended.**")
@@ -812,8 +834,7 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
             f"{m['lowest_caught']:.4f}; highest eligible raw score among hard negatives + background = "
             f"{hn_val:.4f} ({hn_id}).",
             "",
-            f"**Suggestion-rule threshold: {suggested['dup_threshold']:.2f}** (recommendation only; "
-            "`corr_dup_threshold` is unchanged).",
+            f"Suggestion-rule threshold: {suggested['dup_threshold']:.2f} (not adopted - see section 7).",
         ]
 
     cur = by_t[current]
@@ -832,6 +853,8 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
         *SWEEP_HEADER,
         _fmt_row(cur, " (current)"),
     ]
+    if current != PREVIOUS_DUP_THRESHOLD:
+        lines.append(_fmt_row(by_t[PREVIOUS_DUP_THRESHOLD], " (previous default)"))
     if chosen:
         lines.append(_fmt_row(chosen, " (chosen)"))
     if suggested and suggested["dup_threshold"] != current:
@@ -843,6 +866,24 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
             lines.append(f"| {t:.2f} | {reason} | {n} |")
         if not sources:
             lines.append(f"| {t:.2f} | none | 0 |")
+
+    n_non_dup = len(non_dups)
+    lines += [
+        "",
+        "## 7. Adopted threshold",
+        "",
+        f"`corr_dup_threshold` = **{current:.2f}** (app/config/settings.py; previously "
+        f"{PREVIOUS_DUP_THRESHOLD:.2f}). Neither mechanical rule's value is used; the choice is the "
+        "knee of the recall curve.",
+        "",
+        "| threshold | duplicates caught | wrong suggestions | per 100 non-duplicates | note |",
+        "|---|---|---|---|---|",
+    ]
+    for t, note in ADOPTED_COMPARISON.items():
+        r = by_t[t]
+        lines.append(f"| {t:.2f} | {r['dup_tp']}/{r['dup_tp'] + r['dup_fn']} | {r['dup_fp']} "
+                     f"| {100 * r['dup_fp'] / n_non_dup:.1f} | {note} |")
+    lines += ["", *(f"- {note}" for note in ADOPTED_NOTES)]
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 

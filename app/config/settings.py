@@ -33,10 +33,13 @@ class Settings(BaseSettings):
     kb_weak_threshold: float = 0.45
 
     # --- Agent 4 (Correlation Engine: duplicates + incident clusters) ---
-    # Cosine similarity at/above which the best open ticket is a duplicate.
-    # 0.95 and the 0.70 cluster threshold were chosen from results/agent4_eval.md
-    # (synthetic labels; free-text proxy query, see that report).
-    corr_dup_threshold: float = 0.95
+    # RAW cosine similarity at/above which the best-ranked eligible open
+    # ticket is suggested as a duplicate (the user confirms before a merge).
+    # 0.87 from results/agent4_live_calibration.md ("Adopted threshold"):
+    # the last value before duplicate recall drops sharply on live-format
+    # text. The 0.70 cluster threshold is still from results/agent4_eval.md
+    # (free-text proxy query) and has not been re-calibrated.
+    corr_dup_threshold: float = 0.87
     # Similarity at/above which an open ticket counts towards a cluster.
     corr_cluster_threshold: float = 0.70
     # Tickets needed for an incident cluster, INCLUDING the incoming one
