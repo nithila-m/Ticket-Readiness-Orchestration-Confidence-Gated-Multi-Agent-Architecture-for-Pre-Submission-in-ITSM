@@ -11,6 +11,7 @@ from scripts.run_agent4_live_calibration import (
     query_text,
     recommend,
     run_sweep,
+    suggestion_rule,
 )
 
 
@@ -137,3 +138,21 @@ def test_recommend_returns_none_when_rules_1_2_fail(rows):
 
     assert chosen is None
     assert "no threshold is recommended" in working[-1]
+
+
+def srow(t, recall, fp=0):
+    return {"dup_threshold": t, "dup_recall": recall, "dup_tp": round(recall * 10),
+            "dup_fn": 10 - round(recall * 10), "dup_fp": fp}
+
+
+def test_suggestion_rule_picks_highest_threshold_with_recall_at_least_090():
+    chosen, working = suggestion_rule(
+        [srow(0.80, 1.0, fp=30), srow(0.85, 0.9, fp=12), srow(0.90, 0.8, fp=5)], n_non_duplicates=200,
+    )
+    assert chosen["dup_threshold"] == 0.85
+    assert "6.0 per 100 non-duplicate tickets" in working[-1]
+
+
+def test_suggestion_rule_none_when_recall_never_reaches_090():
+    chosen, working = suggestion_rule([srow(0.90, 0.8), srow(0.95, 0.5)], n_non_duplicates=100)
+    assert chosen is None and "No threshold" in working[0]

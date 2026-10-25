@@ -41,7 +41,14 @@ DUPLICATE of duplicate_of; detectable cluster member -> INCIDENT_CLUSTER;
 early cluster member -> NEUTRAL; everything else, hard_negative_near_miss
 included, -> NO_MATCH).
 
-Recommendation rule (applied mechanically by recommend()):
+The engine compares RAW cosine with dup_threshold (the category bonus only
+ranks candidates and counts for clusters) and applies the minimum-field
+gate (corr_dup_min_fields) to the query and to each candidate's
+correlation_text, so the diagnostics below use raw cosine over
+DUPLICATE-eligible candidates; a guard checks they reproduce every
+DUPLICATE decision at every threshold.
+
+Strict rule (applied mechanically by recommend()):
   1. 0 DUPLICATE-caused FP on all four hard-negative types
   2. background DUPLICATE-caused FP rate <= 1%
   3. highest duplicate recall; ties -> the HIGHER threshold
@@ -51,10 +58,16 @@ threshold, which is not swept. Cluster members called DUPLICATE are
 reported but kept out of rules 1-2 (same incident merged - a lesser error
 than merging a different issue).
 
-Score diagnostics (true-original score per duplicate, top score per
-non-duplicate) recompute the engine's scores with its own _cosine and the
-settings bonus over the same candidate set; a guard asserts they match the
-engine's reported max_similarity for every query.
+Suggestion rule (suggestion_rule()): a DUPLICATE is now a suggestion the
+user confirms, so also report the HIGHEST threshold with duplicate recall
+>= 0.90 and its wrong suggestions (all wrong DUPLICATE calls) per 100
+non-duplicate tickets.
+
+Score diagnostics (true-original score per duplicate, top DUPLICATE-
+eligible raw score per non-duplicate) recompute the engine's scores with
+its own _cosine, bonus, field gate and cross-category rule over the same
+candidate set; guards assert they match the engine's max_similarity and
+its DUPLICATE decisions.
 
 Outputs: results/agent4_live_threshold_sweep.csv, results/agent4_live_calibration.md
 """
@@ -76,6 +89,8 @@ from app.agents.correlation_engine import (  # noqa: E402
     _cosine,
     _LazySentenceTransformer,
     candidate_text,
+    correlation_field_lines,
+    query_field_count,
 )
 from app.agents.request_text import build_kb_query  # noqa: E402
 from app.agents.seed_ticket_pool import JsonOpenTicketPool, seed_to_record  # noqa: E402
@@ -107,6 +122,7 @@ HARD_NEGATIVE_TYPES = {
     "hard_negative_near_miss": "near_miss",
 }
 MAX_BACKGROUND_DUP_FP_RATE = 0.01
+SUGGESTION_MIN_RECALL = 0.90
 THIN_FIELD_COUNT = 1  # "thin text" = at most this many non-null fields
 
 
@@ -249,7 +265,17 @@ async def run_sweep(tickets, cache, base_embed_fn, thresholds=DUP_THRESHOLDS) ->
         rows.append(row)
 
     diagnostics = await score_diagnostics(tickets, states, pool, embedder, predictions[thresholds[0]])
+    check_decisions_match(diagnostics, predictions)
     return SweepOutput(tickets, cache, expected, rows, predictions, diagnostics)
+
+
+def check_decisions_match(diagnostics: dict[str, dict], predictions: dict[float, dict]) -> None:
+    """The engine says DUPLICATE exactly when the top eligible raw score reaches the threshold."""
+    for t, preds in predictions.items():
+        for tid, result in preds.items():
+            top = diagnostics[tid]["top_dup_raw"]
+            if (result.outcome == "DUPLICATE") != (top is not None and top >= t):
+                raise AssertionError(f"{tid} at {t}: engine {result.outcome}, diagnostic top raw {top}")
 
 
 # ---------------------------------------------------------------- scoring
@@ -328,19 +354,26 @@ def live_score(tickets, expected, predictions) -> dict:
 
 async def score_diagnostics(tickets, states, pool, embedder, reference_predictions) -> dict[str, dict]:
     """
-    Per query: every eligible candidate's raw and bonus-adjusted score,
-    recomputed as the engine does. Duplicates get their true original's
-    scores and rank; everyone gets the top candidate.
+    Per query, recomputed as the engine does: every eligible candidate's raw
+    cosine and bonus-adjusted ranking score, and which candidates the
+    DUPLICATE step may pick (minimum-field gate + cross-category rule).
+    top_dup_raw - the decision value - is None when the query itself is
+    below the field gate.
     """
     bonus = settings.corr_category_agreement_bonus
+    cross = settings.corr_cross_category_dup_threshold
+    min_fields = settings.corr_dup_min_fields
     lookback = timedelta(hours=settings.corr_lookback_hours)
     out = {}
     for raw in tickets:
         tid = raw["ticket_id"]
         state = states[tid]
         text = query_text(state)
+        query_gated = query_field_count(state) < min_fields
+        empty = {"top_id": None, "top_score": None, "top_raw": None, "query_gated": query_gated,
+                 "top_dup_id": None, "top_dup_raw": None}
         if not text:
-            out[tid] = {"top_id": None, "top_score": None, "top_raw": None}
+            out[tid] = empty
             continue
         now = created_at(raw)
         category = state.detected_category.value if state.detected_category else None
@@ -353,18 +386,26 @@ async def score_diagnostics(tickets, states, pool, embedder, reference_predictio
         for c in candidates:
             r = max(0.0, min(1.0, _cosine(qv, embedder.vector(candidate_text(c)))))
             agrees = category is not None and c.category == category
-            scored.append((min(1.0, r + bonus) if agrees else r, r, agrees, c.ticket_id))
+            lines = correlation_field_lines(c.correlation_text)
+            dup_ok = (lines is None or lines >= min_fields) and (agrees or category is None or r >= cross)
+            scored.append((min(1.0, r + bonus) if agrees else r, r, agrees, c.ticket_id, dup_ok))
         scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
+        if not scored:
+            out[tid] = empty
+            continue
 
         engine_max = reference_predictions[tid].max_similarity
-        mine = round(max(s[1] for s in scored), 4) if scored else None
-        if scored and engine_max != mine:
+        mine = round(max(s[1] for s in scored), 4)
+        if engine_max != mine:
             raise AssertionError(f"{tid}: diagnostic max raw {mine} != engine {engine_max}")
 
+        eligible = [] if query_gated else [s for s in scored if s[4]]
+        top_dup = max(eligible, key=lambda s: s[1]) if eligible else None
         d = {
-            "top_id": scored[0][3] if scored else None,
-            "top_score": scored[0][0] if scored else None,
-            "top_raw": scored[0][1] if scored else None,
+            "top_id": scored[0][3], "top_score": scored[0][0], "top_raw": scored[0][1],
+            "query_gated": query_gated,
+            "top_dup_id": top_dup[3] if top_dup else None,
+            "top_dup_raw": top_dup[1] if top_dup else None,
         }
         if raw["label_type"] == "duplicate":
             orig = next((s for s in scored if s[3] == raw["duplicate_of"]), None)
@@ -373,7 +414,8 @@ async def score_diagnostics(tickets, states, pool, embedder, reference_predictio
                 "original_score": orig[0] if orig else None,
                 "original_raw": orig[1] if orig else None,
                 "original_category_agrees": orig[2] if orig else None,
-                "original_is_top": bool(scored) and scored[0][3] == raw["duplicate_of"],
+                "original_dup_eligible": bool(orig and orig[4]) and not query_gated,
+                "original_is_top": scored[0][3] == raw["duplicate_of"],
             })
         out[tid] = d
     return out
@@ -435,19 +477,36 @@ def recommend(rows: list[dict]) -> tuple[dict | None, list[str]]:
     return chosen, lines
 
 
+def suggestion_rule(rows: list[dict], n_non_duplicates: int) -> tuple[dict | None, list[str]]:
+    """Highest threshold with duplicate recall >= SUGGESTION_MIN_RECALL; returns (row, working)."""
+    passing = [r for r in rows if r["dup_recall"] >= SUGGESTION_MIN_RECALL]
+    if not passing:
+        return None, [f"No threshold reaches duplicate recall >= {SUGGESTION_MIN_RECALL:.2f}."]
+    chosen = max(passing, key=lambda r: r["dup_threshold"])
+    per_100 = 100 * chosen["dup_fp"] / n_non_duplicates if n_non_duplicates else 0.0
+    thresholds = ", ".join(f"{r['dup_threshold']:.2f}" for r in passing)
+    return chosen, [
+        f"Thresholds with duplicate recall >= {SUGGESTION_MIN_RECALL:.2f}: {thresholds}.",
+        f"The highest is **{chosen['dup_threshold']:.2f}**: recall {chosen['dup_recall']:.4f} "
+        f"({chosen['dup_tp']}/{chosen['dup_tp'] + chosen['dup_fn']}), {chosen['dup_fp']} wrong suggestions = "
+        f"**{per_100:.1f} per 100 non-duplicate tickets** ({n_non_duplicates} non-duplicate queries; "
+        "a wrong suggestion is any wrong DUPLICATE call, which the user is now asked to confirm).",
+    ]
+
+
 def margin_at(threshold, out: SweepOutput) -> dict:
     preds = out.predictions[threshold]
     diag = out.diagnostics
     caught = [
-        diag[t["ticket_id"]]["original_score"] for t in out.tickets
+        diag[t["ticket_id"]]["original_raw"] for t in out.tickets
         if t["label_type"] == "duplicate"
         and preds[t["ticket_id"]].outcome == "DUPLICATE"
         and preds[t["ticket_id"]].duplicate_of == t["duplicate_of"]
     ]
 
     def top(labels):
-        vals = [(diag[t["ticket_id"]]["top_score"], t["ticket_id"]) for t in out.tickets
-                if t["label_type"] in labels and diag[t["ticket_id"]]["top_score"] is not None]
+        vals = [(diag[t["ticket_id"]]["top_dup_raw"], t["ticket_id"]) for t in out.tickets
+                if t["label_type"] in labels and diag[t["ticket_id"]]["top_dup_raw"] is not None]
         return max(vals) if vals else (None, None)
 
     return {
@@ -472,7 +531,8 @@ def histogram_lines(dups: list[float], non_dups: list[float], width: float = 0.0
     while b < 1.0 - 1e-9:
         bins.append(round(b, 2))
         b += width
-    lines = ["| score bin | duplicates: true original | non-duplicates: top candidate |", "|---|---|---|"]
+    lines = ["| raw cosine bin | duplicates: true original | non-duplicates: top DUPLICATE-eligible candidate |",
+             "|---|---|---|"]
     for i, b in enumerate(bins):
         last = i == len(bins) - 1
         hi = round(b + width, 2)
@@ -542,7 +602,8 @@ def write_csv(rows: list[dict], path: Path = CSV_PATH) -> None:
         writer.writerows(rows)
 
 
-def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], path: Path = MD_PATH) -> None:
+def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str],
+                   suggestion: tuple[dict | None, list[str]], path: Path = MD_PATH) -> None:
     tickets, cache, diag = out.tickets, out.cache, out.diagnostics
     by_t = {r["dup_threshold"]: r for r in out.rows}
     current = settings.corr_dup_threshold
@@ -554,17 +615,18 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
     for t in tickets:
         label_counts[t["label_type"]] = label_counts.get(t["label_type"], 0) + 1
 
-    dup_scores = [diag[t["ticket_id"]]["original_score"] for t in tickets
-                  if t["label_type"] == "duplicate" and diag[t["ticket_id"]].get("original_score") is not None]
-    dup_raw = [diag[t["ticket_id"]]["original_raw"] for t in tickets
-               if t["label_type"] == "duplicate" and diag[t["ticket_id"]].get("original_raw") is not None]
-    non_dup = [diag[t["ticket_id"]]["top_score"] for t in tickets
-               if t["label_type"] != "duplicate" and diag[t["ticket_id"]]["top_score"] is not None]
-    non_dup_raw = [diag[t["ticket_id"]]["top_raw"] for t in tickets
-                   if t["label_type"] != "duplicate" and diag[t["ticket_id"]]["top_raw"] is not None]
-    rule_set = [diag[t["ticket_id"]]["top_score"] for t in tickets
+    dups = [t for t in tickets if t["label_type"] == "duplicate"]
+    non_dups = [t for t in tickets if t["label_type"] != "duplicate"]
+    dup_raw = [diag[t["ticket_id"]]["original_raw"] for t in dups
+               if diag[t["ticket_id"]].get("original_dup_eligible")]
+    dup_gated = [t["ticket_id"] for t in dups if not diag[t["ticket_id"]].get("original_dup_eligible")]
+    non_dup = [diag[t["ticket_id"]]["top_dup_raw"] for t in non_dups
+               if diag[t["ticket_id"]]["top_dup_raw"] is not None]
+    non_dup_gated = sum(diag[t["ticket_id"]]["top_dup_raw"] is None for t in non_dups)
+    rule_set = [diag[t["ticket_id"]]["top_dup_raw"] for t in tickets
                 if t["label_type"] in set(HARD_NEGATIVE_TYPES) | {"background"}
-                and diag[t["ticket_id"]]["top_score"] is not None]
+                and diag[t["ticket_id"]]["top_dup_raw"] is not None]
+    suggested, suggestion_working = suggestion
     model = next(iter(cache.values()))["model"]
 
     lines = [
@@ -603,26 +665,34 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
         "(settings defaults). Only `dup_threshold` is swept, 0.60-0.98 in 0.01 steps; texts are embedded once.",
         f"- Expected: duplicate -> DUPLICATE of `duplicate_of`; {n_cl_pos} detectable cluster members -> "
         f"INCIDENT_CLUSTER ({n_neutral} early members neutral); everything else, near-misses included, -> NO_MATCH.",
-        "- \"Score\" below is the engine's decision score: raw cosine + "
-        f"{settings.corr_category_agreement_bonus} when the cached Agent 1 category equals the ticket's "
-        "stored category (capped at 1.0).",
+        f"- DUPLICATE decision: RAW cosine >= dup_threshold, among candidates allowed by the minimum-field "
+        f"gate (query and candidate correlation_text need >= {settings.corr_dup_min_fields} field lines; "
+        "candidates without correlation_text stay eligible) and the cross-category rule. The ranking "
+        f"score is raw + {settings.corr_category_agreement_bonus} when the cached Agent 1 category equals "
+        "the ticket's stored category (capped at 1.0); it orders candidates and counts for clusters only.",
         "",
         "## 3. Score distributions",
         "",
-        f"- Duplicates, score of the TRUE original: {_stats(dup_scores)}; raw cosine {_stats(dup_raw)}.",
-        f"- Non-duplicates, top score against any candidate: {_stats(non_dup)}; raw {_stats(non_dup_raw)}.",
+        "All values are raw cosine, the value the DUPLICATE decision now uses.",
+        "",
+        f"- Duplicates, raw cosine of the TRUE original (when the gate allows it): {_stats(dup_raw)}. "
+        f"Blocked by the minimum-field gate, so never caught: {len(dup_gated)}"
+        f"{' (' + ', '.join(dup_gated) + ')' if dup_gated else ''}.",
+        f"- Non-duplicates, top raw cosine among DUPLICATE-eligible candidates: {_stats(non_dup)}. "
+        f"Queries the gate removes from the DUPLICATE step entirely: {non_dup_gated}.",
         f"- Of those, hard negatives + background only (the set rules 1-2 protect): {_stats(rule_set)}.",
         f"- True original ranked first for "
         f"{sum(bool(diag[t['ticket_id']].get('original_is_top')) for t in tickets if t['label_type'] == 'duplicate')}"
         f"/{n_pos} duplicates.",
         "",
-        *histogram_lines(dup_scores, non_dup),
+        *histogram_lines(dup_raw, non_dup),
         "",
         "### Per duplicate",
         "",
-        "| query | original | raw | score | category agrees | original is top | top candidate | "
-        f"caught at {current:.2f} |" + (f" caught at {chosen['dup_threshold']:.2f} |" if chosen else ""),
-        "|---|---|---|---|---|---|---|---|" + ("---|" if chosen else ""),
+        "| query | original | raw (decision) | ranking score | gate allows | category agrees | "
+        f"original ranked first | top candidate | caught at {current:.2f} |"
+        + (f" caught at {suggested['dup_threshold']:.2f} (suggestion rule) |" if suggested else ""),
+        "|---|---|---|---|---|---|---|---|---|" + ("---|" if suggested else ""),
     ]
 
     def caught(tid, t):
@@ -631,31 +701,31 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
             f"no ({r.outcome}{' ' + r.duplicate_of if r.duplicate_of else ''})")
 
     by_id = {t["ticket_id"]: t for t in tickets}
-    for t in sorted((t for t in tickets if t["label_type"] == "duplicate"),
-                    key=lambda t: diag[t["ticket_id"]].get("original_score") or 0):
+    for t in sorted(dups, key=lambda t: diag[t["ticket_id"]].get("original_raw") or 0):
         d = diag[t["ticket_id"]]
         lines.append(
             f"| {t['ticket_id']} | {t['duplicate_of']} | {d['original_raw']:.4f} | {d['original_score']:.4f} "
+            f"| {'yes' if d['original_dup_eligible'] else 'no'} "
             f"| {'yes' if d['original_category_agrees'] else 'no'} | {'yes' if d['original_is_top'] else 'no'} "
             f"| {d['top_id']} ({d['top_score']:.4f}) | {caught(t['ticket_id'], current)} |"
-            + (f" {caught(t['ticket_id'], chosen['dup_threshold'])} |" if chosen else "")
+            + (f" {caught(t['ticket_id'], suggested['dup_threshold'])} |" if suggested else "")
         )
 
     lines += [
         "",
-        "### Highest-scoring non-duplicates",
+        "### Highest-scoring non-duplicates (DUPLICATE-eligible candidates, raw cosine)",
         "",
-        "| query | label | top candidate | candidate label | raw | score |",
-        "|---|---|---|---|---|---|",
+        "| query | label | top eligible candidate | candidate label | raw |",
+        "|---|---|---|---|---|",
     ]
     top_non = sorted(
-        (t for t in tickets if t["label_type"] != "duplicate" and diag[t["ticket_id"]]["top_score"] is not None),
-        key=lambda t: diag[t["ticket_id"]]["top_score"], reverse=True,
+        (t for t in non_dups if diag[t["ticket_id"]]["top_dup_raw"] is not None),
+        key=lambda t: diag[t["ticket_id"]]["top_dup_raw"], reverse=True,
     )[:15]
     for t in top_non:
         d = diag[t["ticket_id"]]
-        lines.append(f"| {t['ticket_id']} | {t['label_type']} | {d['top_id']} | {by_id[d['top_id']]['label_type']} "
-                     f"| {d['top_raw']:.4f} | {d['top_score']:.4f} |")
+        lines.append(f"| {t['ticket_id']} | {t['label_type']} | {d['top_dup_id']} "
+                     f"| {by_id[d['top_dup_id']]['label_type']} | {d['top_dup_raw']:.4f} |")
 
     lines += [
         "",
@@ -665,14 +735,14 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
         "matched ticket | FP with either thin | missed positives with thin text |",
         "|---|---|---|---|---|---|---|---|",
     ]
-    for t in sorted({current, *( [chosen["dup_threshold"]] if chosen else [])}):
+    extra = [r["dup_threshold"] for r in (chosen, suggested) if r]
+    for t in sorted({current, *extra}):
         tb = thin_text_breakdown(tickets, cache, out.expected, out.predictions[t])
         lines.append(f"| {t:.2f} | {tb['thin_queries']} | {tb['thin_positives']} | {tb['dup_fp_total']} "
                      f"| {tb['dup_fp_thin_query']} | {tb['dup_fp_thin_match']} | {tb['dup_fp_thin_either']} "
                      f"| {tb['missed_positives_thin']} |")
 
-    shown = sorted({round(0.60 + 0.05 * i, 2) for i in range(8)} | {current}
-                   | ({chosen["dup_threshold"]} if chosen else set()))
+    shown = sorted({round(0.60 + 0.05 * i, 2) for i in range(8)} | {current} | set(extra))
     lines += [
         "",
         "## 4. Sweep",
@@ -688,11 +758,14 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
         tags = []
         if chosen and t == chosen["dup_threshold"]:
             tags.append("chosen")
+        if suggested and t == suggested["dup_threshold"]:
+            tags.append("suggestion rule")
         if t == current:
             tags.append("current")
         lines.append(_fmt_row(by_t[t], f" ({', '.join(tags)})" if tags else ""))
 
-    lines += ["", "## 5. Recommendation", "", "Rules applied mechanically to the 0.01 sweep:", "", *working, ""]
+    lines += ["", "## 5. Recommendation", "", "### Strict rule", "",
+              "Rules applied mechanically to the 0.01 sweep:", "", *working, ""]
     lines += [
         "Judgements behind the rules:",
         "",
@@ -720,6 +793,29 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
         lines.append("**No threshold is recommended.**")
         lines += ["", *blocking_lines(out, max(by_t))]
 
+    lines += [
+        "",
+        "### Suggestion rule",
+        "",
+        "A DUPLICATE is now a suggestion the user confirms before anything is merged, so a wrong "
+        "suggestion costs one extra question rather than a wrong merge. Rule: the HIGHEST threshold "
+        f"with duplicate recall >= {SUGGESTION_MIN_RECALL:.2f}.",
+        "",
+        *suggestion_working,
+    ]
+    if suggested:
+        m = margin_at(suggested["dup_threshold"], out)
+        hn_val, hn_id = m["highest_rule_set"]
+        lines += [
+            "",
+            f"Margin at {suggested['dup_threshold']:.2f}: lowest true-original raw score still caught = "
+            f"{m['lowest_caught']:.4f}; highest eligible raw score among hard negatives + background = "
+            f"{hn_val:.4f} ({hn_id}).",
+            "",
+            f"**Suggestion-rule threshold: {suggested['dup_threshold']:.2f}** (recommendation only; "
+            "`corr_dup_threshold` is unchanged).",
+        ]
+
     cur = by_t[current]
     lines += [
         "",
@@ -738,8 +834,10 @@ def write_markdown(out: SweepOutput, chosen: dict | None, working: list[str], pa
     ]
     if chosen:
         lines.append(_fmt_row(chosen, " (chosen)"))
+    if suggested and suggested["dup_threshold"] != current:
+        lines.append(_fmt_row(suggested, " (suggestion rule)"))
     lines += ["", "Where the wrong DUPLICATE calls come from:", "", "| dup t | reason | count |", "|---|---|---|"]
-    for t in sorted({current, *([chosen["dup_threshold"]] if chosen else [])}):
+    for t in sorted({current, *extra}):
         sources = duplicate_error_sources(tickets, out.expected, out.predictions[t])
         for reason, n in sources.items():
             lines.append(f"| {t:.2f} | {reason} | {n} |")
@@ -756,9 +854,12 @@ async def main():
     cache = load_cache(tickets)
     out = await run_sweep(tickets, cache, _LazySentenceTransformer())
     chosen, working = recommend(out.rows)
+    n_non_dup = sum(t["label_type"] != "duplicate" for t in tickets)
+    suggestion = suggestion_rule(out.rows, n_non_dup)
     write_csv(out.rows)
-    write_markdown(out, chosen, working)
-    print(f"Recommended dup_threshold: {chosen['dup_threshold']:.2f}" if chosen else "No threshold recommended")
+    write_markdown(out, chosen, working, suggestion)
+    print(f"Strict rule: {chosen['dup_threshold']:.2f}" if chosen else "Strict rule: no threshold")
+    print(f"Suggestion rule: {suggestion[0]['dup_threshold']:.2f}" if suggestion[0] else "Suggestion rule: none")
     print(f"Wrote {CSV_PATH.relative_to(REPO_ROOT)} and {MD_PATH.relative_to(REPO_ROOT)}")
 
 
