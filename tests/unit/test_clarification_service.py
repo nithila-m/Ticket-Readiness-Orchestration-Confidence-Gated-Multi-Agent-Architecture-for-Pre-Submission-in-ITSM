@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.agents.completeness_scorer import score_completeness
 from app.agents.kb_deflection_agent import KBDeflectionAgent, KBRetrievalResult
 from app.config.settings import settings
 from app.orchestration import GraphConversationService
@@ -557,3 +558,42 @@ async def test_kb_stage_not_audited_below_completeness_gate(
     await service.handle_message("conv-1", "Teams isn't working.")
 
     assert [e.stage for e in await store.fetch_audit("conv-1")] == ["extract", "clarify"]
+
+def _scored_analysis(category: str, fields: dict[str, ExtractedField]) -> AnalysisResult:
+    """A fake Agent 1 result scored the same way TicketAnalysisService scores it."""
+    completeness = score_completeness(category, fields)
+    return AnalysisResult(
+        category=CategoryPrediction(value=category, confidence=0.9),
+        extracted_fields=fields,
+        completeness_score=completeness.score,
+        missing_or_uncertain_fields=completeness.missing_or_uncertain_fields,
+    )
+
+
+async def test_field_omitted_on_later_turn_is_carried_forward(
+    fake_extraction_service, fake_clarifier, fake_kb_agent, repository, store
+):
+    fake_extraction_service.analyze.side_effect = [
+        _scored_analysis("wifi_internet", {
+            "symptom_type": ExtractedField(value="drops", confidence=0.9),
+        }),
+        # Turn 2: the extractor picks up the new answer but omits symptom_type.
+        _scored_analysis("wifi_internet", {
+            "device_type": ExtractedField(value="laptop", confidence=0.9),
+        }),
+    ]
+    service = ClarificationService(
+        fake_extraction_service, fake_clarifier, repository, fake_kb_agent, store=store
+    )
+
+    state, _ = await service.handle_message("conv-1", "My wifi keeps dropping.")
+    turn1_score = state.completeness_score
+    state, _ = await service.handle_message("conv-1", "It's my laptop.")
+
+    assert state.extracted_fields["symptom_type"].value == "drops"
+    assert state.extracted_fields["device_type"].value == "laptop"
+    assert "symptom_type" not in state.missing_or_uncertain_fields
+    assert state.completeness_score > turn1_score
+    extract_events = [e for e in await store.fetch_audit("conv-1") if e.stage == "extract"]
+    assert extract_events[-1].payload["carried_forward"] == ["symptom_type"]
+    assert extract_events[-1].payload["fields"]["symptom_type"] == {"value": "drops", "confidence": 0.9}

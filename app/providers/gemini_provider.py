@@ -13,7 +13,16 @@ _LLM_CATEGORIES = ", ".join(c for c in VALID_CATEGORIES if c != "general")
 
 EXTRACTION_SYSTEM_PROMPT = f"""You are an information extraction system for VIT's IT service desk.
 
-Given a user's raw description of an IT issue, extract:
+The input may be a single message or a multi-turn transcript in which each
+line is prefixed "User:" (something the user said) or "Assistant asked:" (a
+clarifying question the service desk asked).
+- Extract facts from ALL "User:" lines across the whole conversation. Facts
+  from earlier user lines still apply unless a later user line contradicts
+  them; when a later user line contradicts an earlier one, use the later value.
+- NEVER extract facts from "Assistant asked:" lines - they are questions, not
+  information the user reported.
+
+Given the user's description of an IT issue, extract:
 1. A category — MUST be exactly one of: {_LLM_CATEGORIES}.
    If none of these clearly apply, return null. Do NOT invent a category name.
 2. Any of the following fields that are ACTUALLY MENTIONED in the text.
@@ -79,10 +88,11 @@ class GeminiProvider(LLMProvider):
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,
-                contents=f"{EXTRACTION_SYSTEM_PROMPT}\n\nUser issue:\n{issue_text}",
+                contents=f"{EXTRACTION_SYSTEM_PROMPT}\n\nConversation:\n{issue_text}",
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=WireExtractionResponse,
+                    temperature=0,
                 ),
             )
         except Exception as exc:
