@@ -40,9 +40,10 @@ TICKETS = [
     ticket("B-1", "background", -40, subject="Slow wifi", message="It is slow."),
 ]
 CACHE = {
-    "O-1": entry("wifi_internet", symptom_type="drops"),
-    "D-1": entry("wifi_internet", symptom_type="drops every few minutes"),
-    "N-1": entry("wifi_internet", symptom_type="drops on my phone"),
+    # Two fields each, so the queries pass Agent 4's minimum-field gate.
+    "O-1": entry("wifi_internet", symptom_type="drops", device_type="laptop"),
+    "D-1": entry("wifi_internet", symptom_type="drops every few minutes", device_type="laptop"),
+    "N-1": entry("wifi_internet", symptom_type="drops on my phone", device_type="phone"),
     "B-1": entry("wifi_internet"),  # no fields extracted
 }
 

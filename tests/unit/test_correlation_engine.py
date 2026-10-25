@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 
 from app.agents.classification_agent import apply_cluster_override
-from app.agents.correlation_engine import CorrelationEngine, candidate_text
+from app.agents.correlation_engine import CorrelationEngine, candidate_text, correlation_field_lines
 from app.agents.ticket_builder import build_correlation_text, build_description
 from app.config.settings import settings
 from app.agents.interfaces import CorrelationAgent, OpenTicketPool
@@ -131,7 +131,10 @@ async def test_building_spelling_variants_count_as_same_building():
 
 
 async def test_duplicate_allowed_when_incoming_building_unknown():
-    result = await engine().check(state(building=None), FakePool([ticket("T1", 1.0, building="TT")]))
+    no_building = state(building=None)
+    # A second field keeps the query above the minimum-field gate; this test is about buildings.
+    no_building.extracted_fields["device_type"] = ExtractedField(value="laptop", confidence=0.9)
+    result = await engine().check(no_building, FakePool([ticket("T1", 1.0, building="TT")]))
     assert result.outcome == "DUPLICATE"
 
 
@@ -308,3 +311,45 @@ async def test_repeat_request_is_duplicate_of_ticket_with_boilerplate_body():
     # Without correlation_text the same ticket is compared by its body instead.
     legacy = stored.model_copy(update={"correlation_text": None})
     assert (await eng.check(s, FakePool([legacy]))).outcome == "NO_MATCH"
+
+
+# --- minimum-field gate (DUPLICATE only) -----------------------------------------
+
+def with_correlation_text(t: TicketRecord, field_lines: int) -> TicketRecord:
+    lines = [f"f{i}: v [s={_MARKER.search(t.title).group(1)}]" for i in range(field_lines)]
+    return t.model_copy(update={"correlation_text": "\n".join(lines + ["Category: Wifi/Internet Support"])})
+
+
+async def test_query_with_one_field_is_never_duplicate():
+    one_field = state(building=None)  # only symptom_type
+    result = await engine(dup_min_fields=2).check(one_field, FakePool([ticket("T1", 1.0)]))
+    assert result.outcome == "NO_MATCH"
+    assert result.max_similarity == 1.0  # still compared, just not a duplicate
+
+
+async def test_candidate_with_one_field_line_is_skipped_for_duplicate():
+    thin = with_correlation_text(ticket("T1", 1.0), field_lines=1)
+    rich = with_correlation_text(ticket("T2", 0.9), field_lines=2)
+    result = await engine(dup_min_fields=2).check(state(), FakePool([thin, rich]))
+    assert result.outcome == "DUPLICATE"
+    assert result.duplicate_of == "T2"
+
+
+async def test_thin_candidates_still_count_for_clusters():
+    thin = [with_correlation_text(ticket(f"T{i}", 0.80), field_lines=1) for i in range(2)]
+    result = await engine(dup_min_fields=2, dup_threshold=0.75).check(state(), FakePool(thin))
+    assert result.outcome == "INCIDENT_CLUSTER"
+    assert {s.ticket_id for s in result.similar_tickets} == {"T0", "T1"}
+
+
+async def test_candidate_without_correlation_text_stays_eligible():
+    seed = ticket("T1", 1.0)
+    assert seed.correlation_text is None
+    result = await engine(dup_min_fields=2).check(state(), FakePool([seed]))
+    assert result.outcome == "DUPLICATE" and result.duplicate_of == "T1"
+
+
+def test_correlation_field_lines_ignores_category_line():
+    assert correlation_field_lines(None) is None
+    assert correlation_field_lines("symptom: drops\nCategory: Wifi/Internet Support") == 1
+    assert correlation_field_lines("a: 1\nb: 2\nCategory: X") == 2

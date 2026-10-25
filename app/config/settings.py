@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # raw similarity >= corr_cross_category_dup_threshold.
     corr_category_agreement_bonus: float = 0.05
     corr_cross_category_dup_threshold: float = 0.95
+    # DUPLICATE needs at least this many non-null Agent 1 fields in the query
+    # and "field: value" lines in a candidate's correlation_text (tickets
+    # without one stay eligible). Thin one-field texts collapse onto each
+    # other (results/agent4_live_calibration.md). Clusters ignore it.
+    corr_dup_min_fields: int = 2
 
     # --- Agent 5 (Classify, Prioritise, Explain) ---
     # Empty = use groq_model (resolved in _default_classification_model), so
