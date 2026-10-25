@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.agents.request_text import build_kb_query
 from app.agents.ticket_builder import (
     TITLE_MAX_CHARS,
     build_description,
@@ -127,3 +128,20 @@ def test_build_ticket_duplicate_copies_duplicate_of_and_cluster():
 def test_built_ticket_revalidates_against_schema():
     t = build_ticket(make_state("printer_support"))
     assert TicketRecord.model_validate(t.model_dump()) == t
+
+
+def test_correlation_text_matches_agent4_query_format():
+    state = make_state()
+    assert build_ticket(state).correlation_text == build_kb_query(
+        state.detected_category.value, state.extracted_fields
+    )
+
+
+def test_correlation_text_uses_agent1_category_not_agent5():
+    state = make_state(detected_category=CategoryPrediction(value="ms_teams", confidence=0.6))
+    assert build_ticket(state).correlation_text.endswith("Category: Microsoft Teams Support")
+
+
+def test_correlation_text_none_when_no_fields_extracted():
+    state = make_state(extracted_fields={"ssid": ExtractedField(value=None, confidence=0.0)})
+    assert build_ticket(state).correlation_text is None

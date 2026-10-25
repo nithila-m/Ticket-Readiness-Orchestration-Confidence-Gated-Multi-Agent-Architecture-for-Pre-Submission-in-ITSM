@@ -69,6 +69,7 @@ class TicketRecord(BaseModel):                      # Agent 6 output (canonical 
     duplicate_of: str | None = None
     incident_cluster_id: str | None = None
     building: str | None = None
+    correlation_text: str | None = None             # Agent 4 comparison text; same format as the incoming query
     status: TicketStatus = "OPEN"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     external_key: str | None = None                 # e.g. Jira "TRO-12"

@@ -15,6 +15,16 @@ Decision order:
   3. NO_MATCH         otherwise, and on an empty pool, an empty query or
                       any failure (never raises).
 
+Compared text: the query is build_kb_query(Agent 1's category, extracted
+fields) - short "field: value" lines plus "Category: <label>". Each ticket
+is compared by its stored correlation_text, built at dispatch in the same
+format from the same source (ticket_builder.build_correlation_text), so
+like is compared with like; the ticket body's boilerplate ("Reported by
+user:", "Completeness: ...", ...) would otherwise drag identical requests
+below the duplicate threshold. Tickets without correlation_text (seed
+tickets, tickets created before it existed, or no extracted fields) fall
+back to "title\ndescription".
+
 Building rule: if the incoming building and a candidate's building are
 both known and differ, the candidate can be neither a duplicate nor a
 cluster member. Agent 1 does not currently extract a building, so when the
@@ -44,7 +54,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.agents.interfaces import OpenTicketPool
-from app.agents.kb_deflection_agent import build_kb_query
+from app.agents.request_text import build_kb_query
 from app.config.buildings import normalize_building
 from app.config.settings import settings
 from app.schemas.conversation import ConversationState
@@ -87,6 +97,9 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def candidate_text(ticket: TicketRecord) -> str:
+    """Stored correlation_text when set; else title + description (see module docstring)."""
+    if ticket.correlation_text:
+        return ticket.correlation_text
     return f"{ticket.title}\n{ticket.description}"
 
 

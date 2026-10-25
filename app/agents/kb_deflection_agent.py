@@ -14,10 +14,9 @@ import sys
 from pathlib import Path
 from typing import Callable, Literal, NamedTuple
 
-from app.config.category_profiles import category_key_to_display
+from app.agents.request_text import build_kb_query  # noqa: F401 - re-exported for existing importers
 from app.config.settings import settings
 from app.schemas.clarification import ClarificationDecision
-from app.schemas.extraction import ExtractedField
 
 _TRO_CODES_DIR = Path(__file__).resolve().parent.parent.parent / "TRO_Codes"
 if str(_TRO_CODES_DIR) not in sys.path:
@@ -45,29 +44,6 @@ NO_MATCH_RESULT = KBRetrievalResult(
     matched_title=None,
     offered_resolution=None,
 )
-
-
-def build_kb_query(category: str | None, extracted_fields: dict[str, ExtractedField]) -> str:
-    """
-    Builds the retrieval query from Agent 1's structured output instead of
-    the speaker-labelled multi-turn transcript. KB articles are embedded as
-    plain "title. symptoms" text (TRO_Codes/kb_insertion.py), so a short,
-    description-shaped query compares like with like; the raw transcript
-    adds "User:"/"Assistant asked:" framing that gets noisier every turn.
-
-    One "field: value" line per non-null field, then a "Category: <label>"
-    line using the canonical display label (a sentence-transformer embeds
-    "Wifi/Internet Support" more meaningfully than "wifi_internet").
-    An unknown key is used as-is; None adds no category line.
-    """
-    lines = [
-        f"{name}: {field.value}"
-        for name, field in extracted_fields.items()
-        if field.value is not None
-    ]
-    if category:
-        lines.append(f"Category: {category_key_to_display(category) or category}")
-    return "\n".join(lines)
 
 
 def run_kb_retrieval(query_text: str, category: str | None = None) -> KBRetrievalResult:
