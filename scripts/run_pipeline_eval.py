@@ -8,6 +8,7 @@ Run from the repo root:
     python scripts/run_pipeline_eval.py                            # all 150 tickets
     python scripts/run_pipeline_eval.py --start 1 --end 60         # one slice
     python scripts/run_pipeline_eval.py --start 1 --end 60 --resume
+    python scripts/run_pipeline_eval.py --start 1 --end 60 --resume --retry-errors
     python scripts/run_pipeline_eval.py --report-only --inputs a.csv b.csv
 
 What is real and what is not:
@@ -34,7 +35,10 @@ results/pipeline_eval_results_{start}-{end}.csv (one row per ticket,
 appended as soon as it finishes), results/pipeline_eval_{start}-{end}.md,
 and uses %TEMP%/tro_pipeline_eval_{start}-{end}.db. The temp DB is kept
 when a run is interrupted (so --resume keeps Agent 4's pool) and deleted
-once every ticket of the slice is recorded. --report-only merges slice
+once every ticket of the slice is recorded. If Groq's quota runs
+out (a 429 after every retry, in Agent 2 or behind Agent 5's rule
+fallback), the run stops without recording that ticket and exits 2;
+rerun with --resume once the quota resets. --report-only merges slice
 CSVs into results/pipeline_eval.md without any API call or model load.
 """
 
@@ -47,6 +51,7 @@ import re
 import statistics
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -267,6 +272,11 @@ def cache_prompt_mismatches(cache: dict[str, dict], current_hash: str | None = N
 @dataclass
 class RetryCounter:
     retries: int = 0
+    quota_exhausted: bool = False   # a rate limit outlasted every retry
+
+    def reset(self) -> None:
+        self.retries = 0
+        self.quota_exhausted = False
 
 
 def _rate_limited(exc: Exception) -> bool:
@@ -291,7 +301,12 @@ async def call_with_retry(fn, counter: RetryCounter, label: str, sleep=asyncio.s
         try:
             return await fn()
         except LLMProviderError as exc:
-            if not _rate_limited(exc) or attempt == len(RETRY_BACKOFF_SECONDS):
+            if not _rate_limited(exc):
+                raise
+            if attempt == len(RETRY_BACKOFF_SECONDS):
+                # Agent 5 swallows this into a rule fallback, so the run
+                # loop checks the flag instead of relying on the exception.
+                counter.quota_exhausted = True
                 raise
             wait = max(RETRY_BACKOFF_SECONDS[attempt], _retry_after(exc) or 0.0)
             counter.retries += 1
@@ -506,8 +521,10 @@ def _candidate_similarity(correlation) -> float | None:
 async def run_ticket(ev: EvalService, ticket: dict, position: int, slice_name: str,
                      cached_texts, store_to_ticket: dict[str, str],
                      cluster_by_ticket: dict[str, str | None]) -> dict:
-    cid = f"eval-{ticket['ticket_id']}"
-    ev.counter.retries = 0
+    # Unique per attempt: a resumed or retried ticket must not read the audit
+    # rows an earlier, unrecorded attempt left in the kept temp DB.
+    cid = f"eval-{ticket['ticket_id']}-{uuid.uuid4().hex[:8]}"
+    ev.counter.reset()
     state, first_action, dup, error = None, None, {}, None
     try:
         message = build_user_message(ticket, cached_texts)
@@ -576,6 +593,18 @@ def read_rows(path: Path) -> list[dict]:
 
 def load_done_ids(path: Path) -> set[str]:
     return {r["ticket_id"] for r in read_rows(path)}
+
+
+def drop_error_rows(path: Path) -> list[str]:
+    """Rewrite the CSV without its ERROR rows; returns the dropped ticket_ids."""
+    rows = read_rows(path)
+    dropped = [r["ticket_id"] for r in rows if r["final_outcome"] == "ERROR"]
+    if dropped:
+        path.unlink()
+        for r in rows:
+            if r["final_outcome"] != "ERROR":
+                append_row(path, r)
+    return dropped
 
 
 def pending_tickets(selected: list[tuple[int, dict]], done: set[str]) -> list[tuple[int, dict]]:
@@ -1044,16 +1073,24 @@ def _progress(pos: int, total: int, row: dict) -> str:
     return f"[{pos}/{total}] {row['ticket_id']} {first} -> {row['final_outcome']}{detail}"
 
 
-async def run(args) -> int:
-    tickets = load_tickets()
+QUOTA_EXIT_CODE = 2
+
+
+async def run(args, *, build=build_service, tickets: list[dict] | None = None,
+              cache: dict[str, dict] | None = None, results_dir: Path = RESULTS_DIR,
+              temp_dir: Path | None = None) -> int:
+    tickets = load_tickets() if tickets is None else tickets
     total = len(tickets)
     start, end = resolve_slice(total, args.start, args.end)
     selected = select_slice(tickets, start, end)
-    cache = load_cache()
+    cache = load_cache() if cache is None else cache
 
     if args.dry_run:
         return dry_run(selected if not args.limit else selected[: args.limit],
                        cache, args.delay, start, end, total)
+    if args.retry_errors and not args.resume:
+        print("ERROR: --retry-errors needs --resume")
+        return 2
 
     mismatched = cache_prompt_mismatches(cache)
     if mismatched:
@@ -1061,8 +1098,14 @@ async def run(args) -> int:
               "EXTRACTION_SYSTEM_PROMPT (prompt_sha256 mismatch). Replaying anyway.")
 
     name = slice_label(start, end)
-    csv_path, md_path, db_path = slice_csv_path(start, end), slice_md_path(start, end), slice_db_path(start, end)
+    csv_path = slice_csv_path(start, end, results_dir)
+    md_path = slice_md_path(start, end, results_dir)
+    db_path = slice_db_path(start, end, temp_dir)
     if args.resume:
+        if args.retry_errors:
+            dropped = drop_error_rows(csv_path)
+            print(f"--retry-errors: re-running {len(dropped)} ERROR ticket(s)"
+                  + (f": {', '.join(dropped)}" if dropped else ""))
         done = load_done_ids(csv_path)
         if done and not db_path.exists():
             print(f"WARNING: {db_path} is missing; Agent 4's pool restarts empty, so tickets "
@@ -1083,12 +1126,24 @@ async def run(args) -> int:
     cluster_by_ticket = {t["ticket_id"]: t.get("duplicate_cluster_id") for t in tickets}
 
     if todo:
-        ev = build_service(db_path, cache)
+        ev = build(db_path, cache)
         cached_texts = cache_by_input_text(cache)
         for i, (pos, ticket) in enumerate(todo):
             if i:
                 await asyncio.sleep(args.delay)
             row = await run_ticket(ev, ticket, pos, name, cached_texts, store_to_ticket, cluster_by_ticket)
+            if ev.counter.quota_exhausted:
+                # Agent 2 raised, or Agent 5 silently fell back to its rule:
+                # either way the row is not a real result. Not recorded, so
+                # --resume runs this ticket again.
+                rows = read_rows(csv_path)
+                if rows:
+                    write_markdown(rows, md_path, merged=False)
+                print(f"Groq quota exhausted after {ticket['ticket_id']}. "
+                      f"Recorded {len(rows)}/{len(selected)}.\n"
+                      "Rerun the same command with --resume later (quota resets ~24h).")
+                print(f"Temp DB kept for --resume: {db_path}")
+                return QUOTA_EXIT_CODE
             append_row(csv_path, row)
             if row["store_ticket_id"]:
                 store_to_ticket[row["store_ticket_id"]] = row["ticket_id"]
@@ -1130,6 +1185,8 @@ def parse_args(argv=None):
     p.add_argument("--limit", type=int, default=None, help="at most N tickets of the slice")
     p.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS, help="seconds between tickets")
     p.add_argument("--resume", action="store_true", help="skip tickets already in the slice CSV")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="with --resume: also re-run tickets recorded as ERROR")
     p.add_argument("--dry-run", action="store_true", help="check cache hits and estimate; no API calls")
     p.add_argument("--report-only", action="store_true", help="merge --inputs CSVs into the report")
     p.add_argument("--inputs", nargs="*", default=[], help="slice CSVs for --report-only")

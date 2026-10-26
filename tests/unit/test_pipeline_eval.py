@@ -292,3 +292,138 @@ def test_slice_report_has_no_merge_note():
     md = pe.render_markdown(ROWS, merged=False)
     assert "## Limitations" in md and "Duplicates were only compared within a slice" not in md
     assert md.index("## Limitations") < md.index("## 1. Funnel")
+
+
+# --- Quota exhaustion + --retry-errors (fake service, no Groq) ---------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from scripts.agent1_cache_lib import prompt_sha256  # noqa: E402
+
+RATE_LIMIT = "Groq API call failed: Error code: 429 - rate limit reached"
+
+
+def fake_ticket(tid):
+    return {"ticket_id": tid, "true_category": "Printer Support", "priority": "MEDIUM",
+            "is_deflectable": False, "completeness_level": "complete",
+            "duplicate_cluster_id": None, "subject": tid, "message": "printer jam", "ocr_text": None}
+
+
+FAKE_TICKETS = [fake_ticket(t) for t in ("T-1", "T-2", "T-3")]
+FAKE_CACHE = {t["ticket_id"]: {"input_text": pe.cache_key_for(f"{t['ticket_id']}. printer jam"),
+                               "prompt_sha256": prompt_sha256()} for t in FAKE_TICKETS}
+
+
+async def _no_sleep(_):
+    return None
+
+
+async def _always_429():
+    raise LLMProviderError(RATE_LIMIT)
+
+
+class FakeStore:
+    async def fetch_audit(self, cid):
+        return []
+
+
+class FakeRepo:
+    async def get(self, cid):
+        return None
+
+
+class FakeService:
+    """behaviour[ticket_id] in {"ok", "quota_agent2", "quota_agent5", "boom"}."""
+
+    def __init__(self, behaviour, counter, calls):
+        self._behaviour, self._counter, self.calls = behaviour, counter, calls
+
+    async def handle_message(self, cid, message):
+        tid = message.split(". ")[0]
+        self.calls.append(tid)
+        mode = self._behaviour.get(tid, "ok")
+        retry = lambda: pe.call_with_retry(_always_429, self._counter, "x",  # noqa: E731
+                                           sleep=_no_sleep, log=lambda _: None)
+        if mode == "quota_agent2":
+            await retry()                         # raises after the last retry
+        if mode == "boom":
+            raise RuntimeError("unexpected failure")
+        outcome = "DISPATCHED"
+        if mode == "quota_agent5":
+            try:
+                await retry()
+            except LLMProviderError:              # what ClassificationAgent does
+                outcome = "PENDING_REVIEW"
+        return ConversationState(conversation_id=cid, terminal_outcome=outcome), SimpleNamespace(action="READY")
+
+
+def fake_build(behaviour, calls):
+    def build(db_path, cache):
+        db_path.write_text("")                    # stands in for the temp SQLite file
+        counter = pe.RetryCounter()
+        return pe.EvalService(FakeService(behaviour, counter, calls), FakeStore(), FakeRepo(), counter)
+    return build
+
+
+async def _run(tmp_path, behaviour, *flags, calls=None):
+    calls = [] if calls is None else calls
+    args = pe.parse_args(["--delay", "0", *flags])
+    code = await pe.run(args, build=fake_build(behaviour, calls), tickets=FAKE_TICKETS,
+                        cache=FAKE_CACHE, results_dir=tmp_path, temp_dir=tmp_path)
+    return code, pe.read_rows(pe.slice_csv_path(1, 3, tmp_path)), calls
+
+
+async def test_final_retry_sets_quota_exhausted():
+    counter = pe.RetryCounter()
+    with pytest.raises(LLMProviderError):
+        await pe.call_with_retry(_always_429, counter, "x", sleep=_no_sleep, log=lambda _: None)
+    assert counter.quota_exhausted and counter.retries == 3
+    counter.reset()
+    assert (counter.retries, counter.quota_exhausted) == (0, False)
+
+
+async def test_quota_on_agent2_stops_run_without_recording(tmp_path, capsys):
+    code, rows, calls = await _run(tmp_path, {"T-2": "quota_agent2"})
+    assert code == 2
+    assert [r["ticket_id"] for r in rows] == ["T-1"]
+    assert calls == ["T-1", "T-2"]                        # T-3 never started
+    assert pe.slice_db_path(1, 3, tmp_path).exists()      # kept for --resume
+    assert pe.slice_md_path(1, 3, tmp_path).exists()
+    out = capsys.readouterr().out
+    assert "Groq quota exhausted after T-2. Recorded 1/3." in out
+    assert "--resume" in out
+
+
+async def test_quota_behind_agent5_fallback_stops_run_without_recording(tmp_path):
+    code, rows, calls = await _run(tmp_path, {"T-2": "quota_agent5"})
+    assert code == 2
+    assert [r["ticket_id"] for r in rows] == ["T-1"]
+    assert calls == ["T-1", "T-2"]
+
+
+async def test_resume_after_quota_runs_the_unrecorded_ticket(tmp_path):
+    await _run(tmp_path, {"T-2": "quota_agent2"})
+    code, rows, calls = await _run(tmp_path, {}, "--resume")
+    assert code == 0 and calls == ["T-2", "T-3"]
+    assert [r["ticket_id"] for r in rows] == ["T-1", "T-2", "T-3"]
+    assert not pe.slice_db_path(1, 3, tmp_path).exists()  # complete -> deleted
+
+
+async def test_retry_errors_reruns_and_replaces_error_rows(tmp_path):
+    code, rows, _ = await _run(tmp_path, {"T-2": "boom"})
+    assert code == 0 and [r["final_outcome"] for r in rows] == ["DISPATCHED", "ERROR", "DISPATCHED"]
+
+    # --resume alone keeps the ERROR row
+    code, rows, calls = await _run(tmp_path, {}, "--resume")
+    assert calls == [] and rows[1]["final_outcome"] == "ERROR"
+
+    code, rows, calls = await _run(tmp_path, {}, "--resume", "--retry-errors")
+    assert code == 0 and calls == ["T-2"]
+    assert sorted(r["ticket_id"] for r in rows) == ["T-1", "T-2", "T-3"]
+    assert {r["ticket_id"]: r["final_outcome"] for r in rows}["T-2"] == "DISPATCHED"
+    assert not any(r["error"] for r in rows)
+
+
+async def test_retry_errors_needs_resume(tmp_path):
+    code, _, calls = await _run(tmp_path, {}, "--retry-errors")
+    assert code == 2 and calls == []
