@@ -12,3 +12,5 @@ langgraph==1.2.11
 # Agent 3 (KB retrieval) and Agent 4 (correlation) embeddings
 chromadb==1.5.9
 sentence-transformers==6.0.0
+# Evaluation figures (scripts/plot_pipeline_eval.py, scripts/plot_agent4_calibration.py)
+matplotlib==3.11.1
