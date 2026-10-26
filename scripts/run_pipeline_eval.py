@@ -10,6 +10,7 @@ Run from the repo root:
     python scripts/run_pipeline_eval.py --start 1 --end 60 --resume
     python scripts/run_pipeline_eval.py --start 1 --end 60 --resume --retry-errors
     python scripts/run_pipeline_eval.py --report-only --inputs a.csv b.csv
+    python scripts/run_pipeline_eval.py --report-only --auto   # every slice CSV in results/
 
 What is real and what is not:
   - Agent 1 is REPLAYED from data/eval/agent1_fields_cache.json
@@ -76,6 +77,8 @@ DATA_DIR = ROOT / "data" / "eval"
 RESULTS_DIR = ROOT / "results"
 CACHE_PATH = DATA_DIR / "agent1_fields_cache.json"
 MERGED_MD = RESULTS_DIR / "pipeline_eval.md"
+MERGED_CSV_NAME = "pipeline_eval_results_merged.csv"
+EXPECTED_TOTAL = 150
 
 DATASET_FILES = [
     "wifi_internet.json",
@@ -1162,19 +1165,85 @@ async def run(args, *, build=build_service, tickets: list[dict] | None = None,
     return 0
 
 
-def report_only(inputs: list[str], out: Path = MERGED_MD) -> int:
-    if not inputs:
-        print("--report-only needs --inputs a.csv [b.csv ...]")
+_SLICE_CSV_RE = re.compile(r"^pipeline_eval_results_(\d+)-(\d+)\.csv$")
+
+
+def discover_slice_csvs(results_dir: Path = RESULTS_DIR) -> list[Path]:
+    """Every results/pipeline_eval_results_<start>-<end>.csv (never the merged file), by start."""
+    found = []
+    for path in Path(results_dir).glob("pipeline_eval_results_*-*.csv"):
+        m = _SLICE_CSV_RE.match(path.name)
+        if m:
+            found.append((int(m.group(1)), int(m.group(2)), path))
+    return [p for _, _, p in sorted(found)]
+
+
+def validate_merge(rows: list[dict], expected_total: int = EXPECTED_TOTAL) -> dict:
+    """Counts for the merge printout. Duplicate ids already failed in merge_csvs()."""
+    positions = {r["position"] for r in rows if r["position"] is not None}
+    return {
+        "slices": slice_summary(rows),
+        "n_rows": len(rows),
+        "n_unique_ids": len({r["ticket_id"] for r in rows}),
+        "missing_positions": [p for p in range(1, expected_total + 1) if p not in positions],
+        "n_error": sum(1 for r in rows if r["final_outcome"] == "ERROR"),
+    }
+
+
+def write_rows_csv(path: Path, rows: list[dict]) -> None:
+    """All rows in one go (same CSV_FIELDS and encoding as append_row)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: _to_csv(row.get(k)) for k in CSV_FIELDS})
+
+
+def _compact_ranges(values: list[int]) -> str:
+    out, i = [], 0
+    while i < len(values):
+        j = i
+        while j + 1 < len(values) and values[j + 1] == values[j] + 1:
+            j += 1
+        out.append(str(values[i]) if i == j else f"{values[i]}-{values[j]}")
+        i = j + 1
+    return ", ".join(out)
+
+
+def report_only(inputs: list[str], out: Path = MERGED_MD, *, auto: bool = False,
+                results_dir: Path = RESULTS_DIR, merged_csv: Path | None = None,
+                expected_total: int = EXPECTED_TOTAL) -> int:
+    """
+    Merge slice CSVs into the markdown report and one merged CSV (next to
+    the report unless merged_csv is given). Duplicate ticket_ids fail;
+    missing positions are reported but do not.
+    """
+    paths = [Path(p) for p in inputs]
+    if auto:
+        paths += [p for p in discover_slice_csvs(results_dir) if p not in paths]
+    if not paths:
+        print("--report-only needs --inputs a.csv [b.csv ...] or --auto")
         return 2
     try:
-        rows = merge_csvs([Path(p) for p in inputs])
+        rows = merge_csvs(paths)
     except (DuplicateTicketError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}")
         return 1
+
+    v = validate_merge(rows, expected_total)
+    print(f"Slices: {len(v['slices'])} ({', '.join(p.name for p in paths)})")
+    for s in v["slices"]:
+        print(f"  slice {s['slice']}: positions {s['min_pos']}-{s['max_pos']}, rows {s['n']}")
+    print(f"Unique ticket_ids: {v['n_unique_ids']} (expected {expected_total})")
+    print("Missing positions: " + (_compact_ranges(v["missing_positions"]) or "none"))
+    print("Duplicate ticket_ids: none")
+    print(f"ERROR rows: {v['n_error']}")
+
+    merged_csv = Path(merged_csv) if merged_csv is not None else Path(out).parent / MERGED_CSV_NAME
+    write_rows_csv(merged_csv, rows)
     write_markdown(rows, out, merged=True)
-    for s in slice_summary(rows):
-        print(f"  slice {s['slice']}: positions {s['min_pos']}-{s['max_pos']}, n={s['n']}")
-    print(f"Merged {len(rows)} rows from {len(inputs)} file(s) -> {out}")
+    print(f"Merged {len(rows)} rows from {len(paths)} file(s) -> {out}, {merged_csv}")
     return 0
 
 
@@ -1190,13 +1259,15 @@ def parse_args(argv=None):
     p.add_argument("--dry-run", action="store_true", help="check cache hits and estimate; no API calls")
     p.add_argument("--report-only", action="store_true", help="merge --inputs CSVs into the report")
     p.add_argument("--inputs", nargs="*", default=[], help="slice CSVs for --report-only")
+    p.add_argument("--auto", action="store_true",
+                   help="with --report-only: merge every results/pipeline_eval_results_<n>-<m>.csv")
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.report_only:
-        return report_only(args.inputs)
+        return report_only(args.inputs, auto=args.auto)
     try:
         return asyncio.run(run(args))
     except ValueError as exc:
