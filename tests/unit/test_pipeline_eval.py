@@ -427,3 +427,50 @@ async def test_retry_errors_reruns_and_replaces_error_rows(tmp_path):
 async def test_retry_errors_needs_resume(tmp_path):
     code, _, calls = await _run(tmp_path, {}, "--retry-errors")
     assert code == 2 and calls == []
+
+
+# --- Merge: auto-discovery, merged CSV, validation ---------------------------------
+
+
+def test_auto_discovery_excludes_merged_file(tmp_path):
+    for name in ("pipeline_eval_results_61-120.csv", "pipeline_eval_results_1-60.csv",
+                 "pipeline_eval_results_merged.csv", "pipeline_eval_results_x.csv"):
+        (tmp_path / name).write_text("")
+    assert [p.name for p in pe.discover_slice_csvs(tmp_path)] == [
+        "pipeline_eval_results_1-60.csv", "pipeline_eval_results_61-120.csv"]
+
+
+def test_auto_merge_writes_merged_csv_sorted_by_position(tmp_path, capsys):
+    _write(tmp_path / "pipeline_eval_results_3-4.csv",
+           [row("C", slice_="3-4", pos=4), row("B", slice_="3-4", pos=3)])
+    _write(tmp_path / "pipeline_eval_results_1-2.csv", [row("A", slice_="1-2", pos=1),
+                                                        done("D", 2, "P3", slice_="1-2")])
+    out = tmp_path / "pipeline_eval.md"
+    assert pe.report_only([], out=out, auto=True, results_dir=tmp_path, expected_total=4) == 0
+    merged = pe.read_rows(tmp_path / "pipeline_eval_results_merged.csv")
+    assert [r["position"] for r in merged] == [1, 2, 3, 4]
+    assert merged[1]["reached_agent5"] is True and merged[1]["pred_priority"] == "P3"
+    assert out.exists()
+    text = capsys.readouterr().out
+    assert "Slices: 2" in text and "Unique ticket_ids: 4 (expected 4)" in text
+    assert "Missing positions: none" in text and "ERROR rows: 0" in text
+
+    # re-running --auto does not pick up the merged file it just wrote
+    assert pe.report_only([], out=out, auto=True, results_dir=tmp_path, expected_total=4) == 0
+
+
+def test_auto_merge_fails_on_duplicate_ticket_id(tmp_path):
+    _write(tmp_path / "pipeline_eval_results_1-2.csv", [row("A", slice_="1-2", pos=1)])
+    _write(tmp_path / "pipeline_eval_results_3-4.csv", [row("A", slice_="3-4", pos=3)])
+    assert pe.report_only([], out=tmp_path / "m.md", auto=True, results_dir=tmp_path) == 1
+    assert not (tmp_path / "pipeline_eval_results_merged.csv").exists()
+
+
+def test_missing_positions_are_reported(tmp_path, capsys):
+    rows = [row("A", pos=1), row("B", pos=2), row("E", pos=5), row("H", pos=8)]
+    v = pe.validate_merge(rows, expected_total=8)
+    assert v["missing_positions"] == [3, 4, 6, 7] and v["n_unique_ids"] == 4
+    _write(tmp_path / "pipeline_eval_results_1-8.csv", rows)
+    assert pe.report_only([], out=tmp_path / "m.md", auto=True, results_dir=tmp_path,
+                          expected_total=8) == 0
+    assert "Missing positions: 3-4, 6-7" in capsys.readouterr().out
